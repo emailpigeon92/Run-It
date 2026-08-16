@@ -277,12 +277,20 @@ function parseSongsCSV(text, t0) {
     if (c.length < 2) continue;
     const raw = (c[iP] || '').trim();
     let when;
-    if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(raw)) {
+    if (/^\+/.test(raw)) {
+      // "+12:30" = twelve and a half minutes into the run. Relative times make a
+      // tracklist portable between runs, which is what you want for testing.
+      const p = raw.slice(1).split(':').map(Number);
+      const secs = p.length >= 3 ? p[0]*3600 + p[1]*60 + (p[2]||0) : p[0]*60 + (p[1]||0);
+      when = t0 + secs;
+    } else if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(raw)) {
+      // Clock time, interpreted in YOUR timezone on the day of the run — which
+      // is what the card header shows, so the two agree.
       const [h, m, s] = raw.split(':').map(Number);
-      when = Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(),
-                      h, m, s || 0) / 1000;
+      when = new Date(base.getFullYear(), base.getMonth(), base.getDate(),
+                      h, m, s || 0).getTime() / 1000;
     } else {
-      when = Date.parse(raw) / 1000;
+      when = Date.parse(raw) / 1000;      // full ISO timestamp, unambiguous
     }
     if (!isFinite(when)) continue;
     rows.push({ at: when, artist: (c[iA] || '').trim(), track: (c[iT] || '').trim() });
@@ -326,16 +334,23 @@ function buildCard(data, opts = {}) {
   const hr = S.heartrate, hasHR = hr.some(h => h > 40);
   const latlng = S.latlng || [], hasMap = latlng.length > 0;
 
-  const W = 1080, H = hasMap ? 1560 : 1350;
+  const W = 1080;
   const BG = '#0A0A0F', INK = '#F2F2F5', DIM = '#7A7A8C', FAINT = '#1C1C26';
   const PAD = 72, PLOT_W = W - 2 * PAD, N_BARS = 168, BAR_GAP = 2.2;
   const barW = (PLOT_W - BAR_GAP * (N_BARS - 1)) / N_BARS;
 
+  // Album covers sit above the waveform, each tied to its stretch of the run by
+  // a curly brace. Only reserve the space if there is artwork to show.
+  const hasArt = songs.some(s => s.art);
+  const ART_SIZE = 46, BRACE_H = 14, ART_GAP = 8;
+  const ART_BAND = hasArt ? ART_SIZE + ART_GAP + BRACE_H + 10 : 0;
+
   const MAP_TOP = 344, MAP_H = 430;
   const WAVE_HALF = hasMap ? 130 : 168;
-  const WAVE_CY = hasMap ? MAP_TOP + MAP_H + 56 + WAVE_HALF : 505;
+  const WAVE_CY = (hasMap ? MAP_TOP + MAP_H + 56 + WAVE_HALF : 505) + ART_BAND;
   const STRIP_Y = WAVE_CY + WAVE_HALF + 38, STRIP_H = 16;
   const HR_TOP = STRIP_Y + STRIP_H + 50, HR_H = 80, ROW_H = 32;
+  const H = (hasMap ? 1560 : 1350) + ART_BAND;
 
   const sorted = gap.slice().sort((a, b) => a - b);
   const gLo = sorted[Math.floor(sorted.length * 0.02)];
@@ -439,8 +454,47 @@ function buildCard(data, opts = {}) {
     o.push(`<text x="${PAD}" y="${MAP_TOP-14}" fill="${DIM}" font-size="16" letter-spacing="2.5">${label}</text>`);
   }
 
+  // ── album covers + curly braces marking each song's stretch of the run
+  if (hasArt) {
+    // stack upward from the waveform: brace, gap, cover — label goes on top
+    const braceTop = WAVE_CY - WAVE_HALF - 10 - BRACE_H;
+    const artTop = braceTop - ART_GAP - ART_SIZE;
+
+    o.push(`<defs><clipPath id="artclip"><rect x="0" y="0" width="${ART_SIZE}" height="${ART_SIZE}" rx="7"/></clipPath></defs>`);
+
+    for (const sg of songs) {
+      const x0 = PAD + sg.t0 / duration * PLOT_W;
+      const x1 = PAD + sg.t1 / duration * PLOT_W;
+      const w = x1 - x0;
+      if (w < 16) continue;                    // too narrow to read anything
+      const xm = (x0 + x1) / 2;
+
+      // horizontal curly brace: two mirrored halves meeting at a downward tip
+      const h = BRACE_H, k = Math.min(h, w / 4);
+      o.push(`<path d="M${x0.toFixed(1)},${braceTop} `
+           + `Q${x0.toFixed(1)},${braceTop + h/2} ${(xm - k).toFixed(1)},${braceTop + h/2} `
+           + `Q${xm.toFixed(1)},${braceTop + h/2} ${xm.toFixed(1)},${braceTop + h} `
+           + `Q${xm.toFixed(1)},${braceTop + h/2} ${(xm + k).toFixed(1)},${braceTop + h/2} `
+           + `Q${x1.toFixed(1)},${braceTop + h/2} ${x1.toFixed(1)},${braceTop}" `
+           + `fill="none" stroke="${sg.colour}" stroke-width="2" opacity="0.85" stroke-linecap="round"/>`);
+
+      if (!sg.art) continue;
+      const size = Math.min(ART_SIZE, w - 3);
+      if (size < 18) continue;
+      const ax = xm - size / 2, ay = artTop + (ART_SIZE - size) / 2;
+      o.push(`<g transform="translate(${ax.toFixed(1)},${ay.toFixed(1)}) scale(${(size/ART_SIZE).toFixed(4)})">`
+           + `<image x="0" y="0" width="${ART_SIZE}" height="${ART_SIZE}" `
+           + `clip-path="url(#artclip)" preserveAspectRatio="xMidYMid slice" href="${sg.art}"/>`
+           + `<rect x="0.5" y="0.5" width="${ART_SIZE-1}" height="${ART_SIZE-1}" rx="7" `
+           + `fill="none" stroke="${sg.colour}" stroke-width="1.5" opacity="0.6"/></g>`);
+    }
+  }
+
   // ── pace waveform
-  o.push(`<text x="${PAD}" y="${WAVE_CY-WAVE_HALF-26}" fill="${DIM}" font-size="16" letter-spacing="2.5">GRADE-ADJUSTED PACE</text>`);
+  const waveLabelY = hasArt
+    ? WAVE_CY - WAVE_HALF - 10 - BRACE_H - ART_GAP - ART_SIZE - 15
+    : WAVE_CY - WAVE_HALF - 26;
+  o.push(`<text x="${PAD}" y="${waveLabelY}" fill="${DIM}" font-size="16" letter-spacing="2.5">GRADE-ADJUSTED PACE</text>`);
   for (let b = 0; b < N_BARS; b++) {
     const lo = Math.floor(b / N_BARS * duration);
     const hi = Math.max(lo + 1, Math.floor((b + 1) / N_BARS * duration));
@@ -514,20 +568,108 @@ function buildCard(data, opts = {}) {
   }};
 }
 
-// ─────────────────────────────────────────────────────────────── entry point
-function loadActivity(name, bufOrText) {
-  const ext = (name.split('.').pop() || '').toLowerCase();
-  let recs;
-  if (ext === 'fit') recs = parseFIT(bufOrText);
-  else if (ext === 'tcx') recs = parseXML(bufOrText, 'tcx');
-  else if (ext === 'gpx') recs = parseXML(bufOrText, 'gpx');
-  else throw new Error(`Unsupported file type ".${ext}" — use .fit, .tcx or .gpx`);
-  const built = buildStreams(recs);
-  return { name: name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' '),
-           t0: built.t0, streams: built.streams, songs: [] };
+// ──────────────────────────────────────────────────────────────── zip support
+// Garmin Connect's "Export Original" hands you a .zip with the .fit inside.
+// Rather than make people unzip by hand every time, read the archive directly.
+// Uses the browser's built-in DecompressionStream — no library needed.
+async function extractFromZip(buf) {
+  const dv = new DataView(buf);
+  const u8 = new Uint8Array(buf);
+
+  // End of Central Directory: scan backwards for 0x06054b50
+  let eocd = -1;
+  for (let i = dv.byteLength - 22; i >= Math.max(0, dv.byteLength - 66000); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('That .zip looks damaged — try downloading it again');
+
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);          // central directory offset
+
+  const wanted = [];
+  for (let i = 0; i < count && p + 46 <= dv.byteLength; i++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method  = dv.getUint16(p + 10, true);
+    const compLen = dv.getUint32(p + 20, true);
+    const fnLen   = dv.getUint16(p + 28, true);
+    const exLen   = dv.getUint16(p + 30, true);
+    const cmLen   = dv.getUint16(p + 32, true);
+    const localAt = dv.getUint32(p + 42, true);
+    const name    = new TextDecoder().decode(u8.subarray(p + 46, p + 46 + fnLen));
+    if (/\.(fit|tcx|gpx)$/i.test(name) && !name.startsWith('__MACOSX'))
+      wanted.push({ name, method, compLen, localAt });
+    p += 46 + fnLen + exLen + cmLen;
+  }
+
+  if (!wanted.length)
+    throw new Error('No .fit, .tcx or .gpx file inside that zip');
+
+  const e = wanted[0];
+  // local header tells us where the data actually starts
+  if (dv.getUint32(e.localAt, true) !== 0x04034b50)
+    throw new Error('That .zip looks damaged — try downloading it again');
+  const lfn = dv.getUint16(e.localAt + 26, true);
+  const lex = dv.getUint16(e.localAt + 28, true);
+  const start = e.localAt + 30 + lfn + lex;
+  const raw = u8.subarray(start, start + e.compLen);
+
+  if (e.method === 0) return { name: e.name, data: raw.slice().buffer };
+  if (e.method !== 8)
+    throw new Error(`Unsupported compression in that zip (method ${e.method})`);
+  if (typeof DecompressionStream === 'undefined')
+    throw new Error('This browser cannot read zips — unzip it yourself and drop the .fit');
+
+  const ds = new DecompressionStream('deflate-raw');
+  const stream = new Blob([raw]).stream().pipeThrough(ds);
+  const out = await new Response(stream).arrayBuffer();
+  return { name: e.name, data: out };
 }
 
-const API = { loadActivity, parseFIT, parseXML, buildStreams, buildCard,
+// ─────────────────────────────────────────────────────────────── entry point
+/* Identify a file by its contents, never by its name.
+   macOS renames duplicate downloads to "Run.fit 2", Windows to "Run (1).fit",
+   and plenty of exports arrive with no extension at all. The bytes don't lie. */
+function sniff(buf) {
+  const dv = new DataView(buf), u8 = new Uint8Array(buf);
+  if (dv.byteLength >= 4 && dv.getUint32(0, false) === 0x504B0304) return 'zip';
+  if (dv.byteLength >= 12 &&
+      String.fromCharCode(u8[8], u8[9], u8[10], u8[11]) === '.FIT') return 'fit';
+  const head = new TextDecoder('utf-8', { fatal: false }).decode(u8.subarray(0, 4096));
+  if (/<gpx[\s>]/i.test(head)) return 'gpx';
+  if (/<TrainingCenterDatabase|<Trackpoint/i.test(head)) return 'tcx';
+  return null;
+}
+
+function cleanName(name) {
+  return name
+    .replace(/\.(fit|tcx|gpx|zip)\b.*$/i, '')   // extension and any " 8" after it
+    .replace(/[\s_-]*\(?\d+\)?$/, '')           // trailing "(1)" or " 2"
+    .replace(/[_-]+/g, ' ')
+    .trim() || 'Run';
+}
+
+function loadActivity(name, bufOrText) {
+  // accept a string for convenience, but sniffing needs bytes
+  const buf = typeof bufOrText === 'string'
+    ? new TextEncoder().encode(bufOrText).buffer : bufOrText;
+
+  const kind = sniff(buf);
+  if (kind === 'zip')
+    throw new Error('That is a .zip — the site should have unpacked it. Try again, '
+                  + 'or unzip it yourself and drop the file inside.');
+  if (!kind)
+    throw new Error("Couldn't recognise that file. It should be a .fit, .tcx or .gpx "
+                  + 'export from Garmin or Strava.');
+
+  const recs = kind === 'fit'
+    ? parseFIT(buf)
+    : parseXML(new TextDecoder().decode(new Uint8Array(buf)), kind);
+
+  const built = buildStreams(recs);
+  return { name: cleanName(name), t0: built.t0, streams: built.streams, songs: [] };
+}
+
+const API = { loadActivity, extractFromZip, sniff, cleanName, parseFIT, parseXML, buildStreams, buildCard,
               parseSongsCSV, mapSongs, gradeAdjusted, paceStr, palette };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = API;

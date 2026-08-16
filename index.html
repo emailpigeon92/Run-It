@@ -70,10 +70,10 @@
 
 <div class="drop" id="drop">
   <h2>Drop a run file here</h2>
-  <p><code>.fit</code> from Garmin · <code>.tcx</code> · <code>.gpx</code> from Strava</p>
+  <p><code>.fit</code> from Garmin · <code>.tcx</code> · <code>.gpx</code> from Strava · or the <code>.zip</code> Garmin gives you</p>
   <p class="or">or <span class="link" id="pick">choose a file</span>
      · <span class="link" id="demo">see a demo run</span></p>
-  <input type="file" id="file" accept=".fit,.tcx,.gpx" hidden>
+  <input type="file" id="file" hidden>
   <input type="file" id="csv" accept=".csv" hidden>
 </div>
 
@@ -95,6 +95,8 @@
     </div>
     <div class="ctl">
       <label class="chk"><input type="checkbox" id="d3" checked> 3D route</label>
+      <label class="chk"><input type="checkbox" id="art"> Album covers</label>
+      <span id="artstatus" style="font-size:13px;color:var(--dim)"></span>
     </div>
     <div class="ctl">
       <label>Last.fm username</label>
@@ -136,21 +138,30 @@
   const show = msg => { const e = $('err'); e.textContent = msg; e.classList.add('show'); };
   const clear = () => $('err').classList.remove('show');
 
-  // ── read a file the right way for its type
-  function readFile(file) {
+  // Always read bytes. The engine identifies the format from its contents, not
+  // the filename — macOS renames duplicate downloads to "Run.fit 2", which no
+  // extension check survives.
+  function readBytes(file) {
     return new Promise((res, rej) => {
       const r = new FileReader();
       r.onerror = () => rej(new Error('Could not read that file'));
       r.onload = () => res(r.result);
-      /\.fit$/i.test(file.name) ? r.readAsArrayBuffer(file) : r.readAsText(file);
+      r.readAsArrayBuffer(file);
     });
   }
+  const readText = async file =>
+    new TextDecoder().decode(new Uint8Array(await readBytes(file)));
 
   async function handleActivity(file) {
     clear();
     try {
-      const data = await readFile(file);
-      activity = RunCard.loadActivity(file.name, data);
+      let name = file.name;
+      let data = await readBytes(file);
+      if (RunCard.sniff(data) === 'zip') {        // Garmin ships a zip
+        const inner = await RunCard.extractFromZip(data);
+        name = inner.name; data = inner.data;
+      }
+      activity = RunCard.loadActivity(name, data);
       applySongs();
       render();
       $('out').classList.add('show');
@@ -168,6 +179,7 @@
                                           activity.streams.distance);
     const dur = activity.streams.time[activity.streams.time.length - 1];
     activity.songs = RunCard.mapSongs(songRows, activity.t0, dur, gap);
+    if (typeof applyArt === 'function' && $('art').checked) applyArt(true);
   }
 
   function render() {
@@ -335,13 +347,63 @@
   $('csv').onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
     try {
-      songRows = RunCard.parseSongsCSV(await readFile(f), activity ? activity.t0 : 0);
+      songRows = RunCard.parseSongsCSV(await readText(f), activity ? activity.t0 : 0);
       applySongs(); render(); clear();
     } catch (err) { show(err.message || String(err)); }
   };
 
   for (const id of ['ex', 'rot', 'd3'])
     $(id).addEventListener('input', render);
+
+  // ── album covers, fetched once per session and cached by artist|track
+  const artCache = new Map();
+  const artKey = s => `${s.artist}|${s.track}`.toLowerCase();
+
+  function applyArt(on) {
+    if (!activity) return;
+    for (const s of activity.songs) s.art = on ? (artCache.get(artKey(s)) || null) : null;
+  }
+
+  async function loadArt() {
+    if (!activity || !activity.songs.length) {
+      $('artstatus').textContent = 'load a tracklist first';
+      $('art').checked = false;
+      return;
+    }
+    const need = activity.songs.filter(s => !artCache.has(artKey(s)));
+    if (!need.length) { applyArt(true); render(); return; }
+
+    $('artstatus').textContent = `looking up ${need.length} covers…`;
+    try {
+      const r = await fetch('/api/art', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tracks: need.map(s => ({ artist: s.artist, track: s.track })) }),
+      });
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('application/json'))
+        throw new Error('needs the deployed site — /api/art only runs on Vercel');
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+
+      // remember misses too, so we don't ask again for the same tracks
+      for (const s of need) artCache.set(artKey(s), j.art[artKey(s)] || null);
+      applyArt(true);
+      render();
+      const got = activity.songs.filter(s => s.art).length;
+      $('artstatus').textContent = `${got} of ${activity.songs.length} found`
+        + (j.rateLimited ? ' — iTunes rate-limited, try again in a minute' : '');
+    } catch (e) {
+      $('art').checked = false;
+      $('artstatus').textContent = '';
+      show('Album covers: ' + (e.message || e));
+    }
+  }
+
+  $('art').addEventListener('change', e => {
+    if (e.target.checked) loadArt();
+    else { applyArt(false); render(); $('artstatus').textContent = ''; }
+  });
 
   const drop = $('drop');
   ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => {
@@ -350,16 +412,19 @@
   ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => {
     e.preventDefault(); drop.classList.remove('hot');
   }));
-  drop.addEventListener('drop', e => {
+  drop.addEventListener('drop', async e => {
     const files = [...(e.dataTransfer.files || [])];
+    if (!files.length) return;
+    // sort by contents, not by name
     const csv = files.find(f => /\.csv$/i.test(f.name));
-    const act = files.find(f => /\.(fit|tcx|gpx)$/i.test(f.name));
-    if (csv) readFile(csv).then(t => {
-      songRows = RunCard.parseSongsCSV(t, activity ? activity.t0 : 0);
-      if (!act) { applySongs(); render(); }
-    }).catch(err => show(err.message));
-    if (act) setTimeout(() => handleActivity(act), csv ? 120 : 0);
-    if (!csv && !act) show('That file type isn\'t supported — use .fit, .tcx, .gpx or .csv');
+    const act = files.find(f => f !== csv);
+    if (csv) {
+      try {
+        songRows = RunCard.parseSongsCSV(await readText(csv), activity ? activity.t0 : 0);
+        if (!act) { applySongs(); render(); }
+      } catch (err) { show(err.message); }
+    }
+    if (act) handleActivity(act);
   });
   window.addEventListener('dragover', e => e.preventDefault());
   window.addEventListener('drop', e => e.preventDefault());

@@ -129,6 +129,7 @@
 
 </div>
 
+<script src="states.js"></script>
 <script src="app.js"></script>
 <script>
 (function () {
@@ -179,7 +180,12 @@
                                           activity.streams.distance);
     const dur = activity.streams.time[activity.streams.time.length - 1];
     activity.songs = RunCard.mapSongs(songRows, activity.t0, dur, gap);
-    if (typeof applyArt === 'function' && $('art').checked) applyArt(true);
+    // A new tracklist means new songs: re-use anything cached, then quietly go
+    // fetch covers for whatever is new, so the user doesn't have to re-tick.
+    if ($('art').checked) {
+      applyArt(true);
+      if (activity.songs.some(s => !artCache.has(artKey(s)))) setTimeout(loadArt, 0);
+    }
   }
 
   function render() {

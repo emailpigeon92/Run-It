@@ -324,6 +324,32 @@ const paceStr = mps => {
 };
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+// ──────────────────────────────────────────────────── state locator (US only)
+function statesData() {
+  if (typeof US_STATES !== 'undefined' && US_STATES) return US_STATES;
+  if (typeof window !== 'undefined' && window.US_STATES) return window.US_STATES;
+  return null;
+}
+
+function pointInRing(lon, lat, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > lat) !== (yj > lat) &&
+        lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function findState(lat, lon) {
+  const data = statesData();
+  if (!data) return null;
+  for (const name in data)
+    for (const ring of data[name])
+      if (pointInRing(lon, lat, ring)) return { name, rings: data[name] };
+  return null;
+}
+
 // ───────────────────────────────────────────────────────────── card renderer
 function buildCard(data, opts = {}) {
   const O = Object.assign({ map3d: true, rot: 20, relief: 0.32, name: null }, opts);
@@ -393,6 +419,41 @@ function buildCard(data, opts = {}) {
     o.push(`<text x="${x}" y="232" fill="${INK}" font-size="40" font-weight="600">${v}</text>`);
     o.push(`<text x="${x}" y="258" fill="${DIM}" font-size="15" letter-spacing="1.8">${l}</text>`);
   });
+  // ── state locator inset, top right
+  if (hasMap && opts.locator !== false) {
+    const mid = latlng[Math.floor(latlng.length / 2)];
+    const st = mid && findState(mid[0], mid[1]);
+    if (st) {
+      const BOX = 132, bx = W - PAD - BOX, by = 44;
+      const pts = st.rings.flat();
+      const lons = pts.map(p => p[0]), lats = pts.map(p => p[1]);
+      const lat0 = (Math.max(...lats) + Math.min(...lats)) / 2;
+      const kx = Math.cos(lat0 * Math.PI / 180);
+      const spanX = Math.max(1e-9, (Math.max(...lons) - Math.min(...lons)) * kx);
+      const spanY = Math.max(1e-9, Math.max(...lats) - Math.min(...lats));
+      const inner = BOX - 30;
+      const sc = Math.min(inner / spanX, inner / spanY);
+      const ox = bx + (BOX - spanX * sc) / 2 + Math.min(...lons) * kx * -sc;
+      const oy = by + 4 + (inner - spanY * sc) / 2 + Math.max(...lats) * sc;
+      const px = (lo, la) => [ox + lo * kx * sc, oy - la * sc];
+
+      o.push(`<rect x="${bx}" y="${by}" width="${BOX}" height="${BOX}" rx="12" `
+           + `fill="#101018" stroke="${FAINT}" stroke-width="1.5"/>`);
+      for (const ring of st.rings) {
+        const d = ring.map((p, i) => (i ? 'L' : 'M') +
+          px(p[0], p[1]).map(v => v.toFixed(1)).join(',')).join(' ') + ' Z';
+        o.push(`<path d="${d}" fill="#20202C" stroke="#4A4A5E" stroke-width="1.2" `
+             + `stroke-linejoin="round"/>`);
+      }
+      const [dx, dy] = px(mid[1], mid[0]);
+      o.push(`<circle cx="${dx.toFixed(1)}" cy="${dy.toFixed(1)}" r="6" `
+           + `fill="#FF5FA2" opacity="0.28"/>`);
+      o.push(`<circle cx="${dx.toFixed(1)}" cy="${dy.toFixed(1)}" r="3" fill="#FF5FA2"/>`);
+      o.push(`<text x="${bx + BOX / 2}" y="${by + BOX - 9}" fill="${DIM}" font-size="12" `
+           + `text-anchor="middle" letter-spacing="1.6">${esc(st.name.toUpperCase())}</text>`);
+    }
+  }
+
   o.push(`<line x1="${PAD}" y1="292" x2="${W-PAD}" y2="292" stroke="${FAINT}" stroke-width="1.5"/>`);
 
   // ── route
@@ -669,7 +730,7 @@ function loadActivity(name, bufOrText) {
   return { name: cleanName(name), t0: built.t0, streams: built.streams, songs: [] };
 }
 
-const API = { loadActivity, extractFromZip, sniff, cleanName, parseFIT, parseXML, buildStreams, buildCard,
+const API = { loadActivity, extractFromZip, sniff, cleanName, findState, parseFIT, parseXML, buildStreams, buildCard,
               parseSongsCSV, mapSongs, gradeAdjusted, paceStr, palette };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = API;

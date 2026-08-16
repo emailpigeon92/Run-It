@@ -366,7 +366,7 @@ function buildCard(data, opts = {}) {
   const W = 1080;
   const BG    = LIGHT ? '#FFFFFF' : '#0A0A0F';
   const INK   = LIGHT ? '#111318' : '#F2F2F5';
-  const DIM   = LIGHT ? '#565E6B' : '#7A7A8C';          // darker than before
+  const DIM   = LIGHT ? '#3D4550' : '#8B92A0';          // dark grey, not light
   const HEAD  = LIGHT ? '#242A33' : '#D2D6DE';          // section headings
   const FAINT = LIGHT ? '#E4E6EB' : '#1C1C26';
   const HALO  = LIGHT ? '#FFFFFF' : '#000000';   // casing behind the route
@@ -380,8 +380,9 @@ function buildCard(data, opts = {}) {
   // Album covers sit above the waveform, each tied to its stretch of the run by
   // a curly brace. Only reserve the space if there is artwork to show.
   const hasArt = songs.some(s => s.art);
-  const ART_SIZE = 76, BRACE_H = 13, ART_GAP = 7;
-  const ART_BAND = hasArt ? ART_SIZE + ART_GAP + BRACE_H + 8 : 0;
+  const ART_SIZE = 76;
+  // cover, 9px gap, rule, 16px, pace text, 14px to the chart
+  const ART_BAND = (hasArt || songs.length) ? ART_SIZE + 9 + 16 + 14 : 0;
 
   const LOC_BOX = 172, LOC_GAP = 22;
   const hasLoc = hasMap && opts.locator !== false;
@@ -389,9 +390,9 @@ function buildCard(data, opts = {}) {
   const MAP_W = hasLoc ? PLOT_W - LOC_BOX - LOC_GAP : PLOT_W;
   const WAVE_HALF = hasMap ? 118 : 168;
   const WAVE_CY = (hasMap ? MAP_TOP + MAP_H + 74 + WAVE_HALF : 505) + ART_BAND;
-  const STRIP_Y = WAVE_CY + WAVE_HALF + 38, STRIP_H = 16;
-  const HR_TOP = STRIP_Y + STRIP_H + 62, HR_H = 70, ROW_H = 32;
-  const H = (hasMap ? 1560 : 1350) + ART_BAND;   // provisional; trimmed below
+  const ROW_H = 32;
+  const CHART_TOP = WAVE_CY - WAVE_HALF, CHART_BOT = WAVE_CY + WAVE_HALF;
+  const H = (hasMap ? 1330 : 1120) + ART_BAND;   // provisional; trimmed below
 
   const sorted = gap.slice().sort((a, b) => a - b);
   const gLo = sorted[Math.floor(sorted.length * 0.02)];
@@ -460,9 +461,9 @@ function buildCard(data, opts = {}) {
   // equal width. Measure each item and distribute the leftover space instead.
   const textW = (str, size, ls = 0) => {
     let w = 0;
-    for (const ch of String(str)) w += /[.,:'!|]/.test(ch) ? size * 0.30
-                                   : ch === ' ' ? size * 0.28
-                                   : /[A-Z]/.test(ch) ? size * 0.66 : size * 0.56;
+    for (const ch of String(str)) w += /[.,:'!|]/.test(ch) ? size * 0.32
+                                   : ch === ' ' ? size * 0.30
+                                   : /[A-Z]/.test(ch) ? size * 0.70 : size * 0.60;
     return w + ls * String(str).length;
   };
   const statSizes = stats.map(([v]) => String(v).length > 8 ? 22 : 28);
@@ -636,39 +637,48 @@ function buildCard(data, opts = {}) {
     section(MAP_TOP - 22, 'ROUTE', label.replace(/^ROUTE\s*·\s*/, ''));
   }
 
-  // ── album covers + curly braces marking each song's stretch of the run
-  if (hasArt) {
-    // stack upward from the waveform: brace, gap, cover — label goes on top
-    const braceTop = WAVE_CY - WAVE_HALF - 10 - BRACE_H;
-    const artTop = braceTop - ART_GAP - ART_SIZE;
+  // ── song band: album cover, a rule spanning the stretch it played, and its
+  //    average pace underneath. Sits above the chart so it reads as a header.
+  if (hasArt || songs.length) {
+    const textY  = CHART_TOP - 14;
+    const lineY  = textY - 16;
+    const artBot = lineY - 9;
+    const artTop = artBot - ART_SIZE;
 
-    o.push(`<defs><clipPath id="artclip"><rect x="0" y="0" width="${ART_SIZE}" height="${ART_SIZE}" rx="7"/></clipPath></defs>`);
+    o.push(`<defs><clipPath id="artclip"><rect x="0" y="0" width="${ART_SIZE}" height="${ART_SIZE}" rx="9"/></clipPath></defs>`);
 
     for (const sg of songs) {
       const x0 = PX + sg.t0 / duration * PW;
       const x1 = PX + sg.t1 / duration * PW;
       const w = x1 - x0;
-      if (w < 16) continue;                    // too narrow to read anything
+      if (w < 6) continue;
       const xm = (x0 + x1) / 2;
 
-      // horizontal curly brace: two mirrored halves meeting at a downward tip
-      const h = BRACE_H, k = Math.min(h, w / 4);
-      o.push(`<path d="M${x0.toFixed(1)},${braceTop} `
-           + `Q${x0.toFixed(1)},${braceTop + h/2} ${(xm - k).toFixed(1)},${braceTop + h/2} `
-           + `Q${xm.toFixed(1)},${braceTop + h/2} ${xm.toFixed(1)},${braceTop + h} `
-           + `Q${xm.toFixed(1)},${braceTop + h/2} ${(xm + k).toFixed(1)},${braceTop + h/2} `
-           + `Q${x1.toFixed(1)},${braceTop + h/2} ${x1.toFixed(1)},${braceTop}" `
-           + `fill="none" stroke="${sg.colour}" stroke-width="2" opacity="0.85" stroke-linecap="round"/>`);
+      // butt caps and no gap, so the rules tile into one continuous bar; the
+      // white dividers below do the separating
+      o.push(`<line x1="${x0.toFixed(1)}" y1="${lineY}" x2="${x1.toFixed(1)}" y2="${lineY}" `
+           + `stroke="${sg.colour}" stroke-width="4" stroke-linecap="butt"/>`);
+
+      if (w >= 26)
+        o.push(`<text x="${xm.toFixed(1)}" y="${textY}" fill="${sg.colour}" font-size="11" `
+             + `font-weight="600" text-anchor="middle">${paceStr(sg.gap)}</text>`);
 
       if (!sg.art) continue;
       const size = Math.min(ART_SIZE, w - 3);
-      if (size < 18) continue;
-      const ax = xm - size / 2, ay = artTop + (ART_SIZE - size) / 2;
+      if (size < 20) continue;
+      const ax = xm - size / 2, ay = artBot - size;
       o.push(`<g transform="translate(${ax.toFixed(1)},${ay.toFixed(1)}) scale(${(size/ART_SIZE).toFixed(4)})">`
            + `<image x="0" y="0" width="${ART_SIZE}" height="${ART_SIZE}" `
            + `clip-path="url(#artclip)" preserveAspectRatio="xMidYMid slice" href="${sg.art}"/>`
-           + `<rect x="0.5" y="0.5" width="${ART_SIZE-1}" height="${ART_SIZE-1}" rx="7" `
-           + `fill="none" stroke="${sg.colour}" stroke-width="1.5" opacity="0.6"/></g>`);
+           + `<rect x="0.5" y="0.5" width="${ART_SIZE-1}" height="${ART_SIZE-1}" rx="9" `
+           + `fill="none" stroke="${sg.colour}" stroke-width="1.5" opacity="0.55"/></g>`);
+    }
+
+    // white ticks between consecutive songs, drawn on top of the joined rules
+    for (let i = 1; i < songs.length; i++) {
+      const xb = PX + songs[i].t0 / duration * PW;
+      o.push(`<line x1="${xb.toFixed(1)}" y1="${lineY - 3}" x2="${xb.toFixed(1)}" y2="${lineY + 3}" `
+           + `stroke="${BG}" stroke-width="2.5"/>`);
     }
   }
 
@@ -683,12 +693,11 @@ function buildCard(data, opts = {}) {
   const songPaces = songs.length ? songs.map(s => secPerMi(s.gap)) : [runPace];
   const PACE_TOP = Math.min(...songPaces) - 30;      // faster = smaller number
   const PACE_BOT = Math.max(...songPaces) + 30;
-  const CHART_TOP = WAVE_CY - WAVE_HALF, CHART_BOT = WAVE_CY + WAVE_HALF;
   const yOf = ps => CHART_TOP + (Math.max(PACE_TOP, Math.min(PACE_BOT, ps)) - PACE_TOP)
                     / (PACE_BOT - PACE_TOP) * (CHART_BOT - CHART_TOP);
   const avgY = yOf(runPace);
 
-  const paceTopY = hasArt ? CHART_TOP - 10 - BRACE_H - ART_GAP - ART_SIZE : CHART_TOP;
+  const paceTopY = CHART_TOP - ART_BAND;
   section(paceTopY - 26, 'GRADE-ADJUSTED PACE', 'MIN / MI');
 
   // gridlines + axis
@@ -721,73 +730,8 @@ function buildCard(data, opts = {}) {
          + `rx="${(barW/2).toFixed(2)}" fill="${sg ? sg.colour : (LIGHT?'#9AA0AC':'#3A3A48')}" opacity="0.40"/>`);
   }
 
-  // per-song average caps, each labelled with its pace
-  for (const sg of songs) {
-    const x0 = PX + sg.t0 / duration * PW, x1 = PX + sg.t1 / duration * PW;
-    if (x1 - x0 < 5) continue;
-    const y = yOf(secPerMi(sg.gap));
-    o.push(`<line x1="${x0.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(x1-2).toFixed(1)}" y2="${y.toFixed(1)}" `
-         + `stroke="${BG}" stroke-width="6" stroke-linecap="round"/>`);
-    o.push(`<line x1="${x0.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(x1-2).toFixed(1)}" y2="${y.toFixed(1)}" `
-         + `stroke="${sg.colour}" stroke-width="3.5" stroke-linecap="round"/>`);
-    if (x1 - x0 >= 26) {
-      const above = y <= avgY;                 // keep the label off the bars
-      o.push(`<text x="${((x0 + x1) / 2 - 1).toFixed(1)}" y="${(above ? y - 7 : y + 14).toFixed(1)}" `
-           + `fill="${sg.colour}" font-size="10.5" font-weight="600" text-anchor="middle">`
-           + `${paceStr(sg.gap)}</text>`);
-    }
-  }
-
-  // ── song strip
-  for (const s of songs) {
-    const x0 = PX + s.t0 / duration * PW, x1 = PX + s.t1 / duration * PW;
-    o.push(`<rect x="${x0.toFixed(2)}" y="${STRIP_Y}" width="${Math.max(2, x1-x0-2.5).toFixed(2)}" height="${STRIP_H}" rx="${STRIP_H/2}" fill="${s.colour}"/>`);
-  }
-
-  // ── heart rate (or elevation), split by song so the colours line up with
-  //    the pace chart directly above it
-  const series = hasHR ? hr : elev;
-  const sLo = Math.min(...series), sHi = Math.max(...series);
-  const yHR = i => {
-    const n = sHi > sLo ? (series[i] - sLo) / (sHi - sLo) : 0.5;
-    return HR_TOP + HR_H - n * HR_H;
-  };
-  const xHR = i => PX + S.time[i] / duration * PW;
-
-  section(HR_TOP - 26, hasHR ? 'HEART RATE' : 'ELEVATION', hasHR ? 'BPM' : 'FEET');
-  for (const frac of [1, 0.5, 0]) {
-    const yy = HR_TOP + HR_H - frac * HR_H;
-    const val = sLo + frac * (sHi - sLo);
-    o.push(`<line x1="${PX}" y1="${yy.toFixed(1)}" x2="${W-PAD}" y2="${yy.toFixed(1)}" `
-         + `stroke="${FAINT}" stroke-width="1" stroke-dasharray="2 6" opacity="0.9"/>`);
-    o.push(`<text x="${PX - 10}" y="${(yy + 4).toFixed(1)}" fill="${DIM}" font-size="12.5" `
-         + `text-anchor="end">${hasHR ? Math.round(val) : Math.round(val * 3.28084)}</text>`);
-  }
-
-
-  const stepHR = Math.max(1, Math.floor(series.length / 500));
-  const spans = songs.length
-    ? songs.map(sg => ({ a: Math.floor(sg.t0), b: Math.ceil(sg.t1), c: sg.colour }))
-    : [{ a: 0, b: series.length - 1, c: hasHR ? '#E11D48' : '#3B6E9E' }];
-
-  for (const sp of spans) {
-    const pts = [];
-    for (let i = Math.max(0, sp.a); i <= Math.min(series.length - 1, sp.b); i += stepHR)
-      pts.push([xHR(i), yHR(i)]);
-    if (pts.length < 2) continue;
-    const d = pts.map((p, k) => (k ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
-    // the fill needs one subpath: baseline → curve → baseline. A second M here
-    // would orphan the first point and close the polygon into a wedge.
-    const fill = `M ${pts[0][0].toFixed(1)},${HR_TOP+HR_H} `
-               + pts.map(p => `L ${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ')
-               + ` L ${pts[pts.length-1][0].toFixed(1)},${HR_TOP+HR_H} Z`;
-    o.push(`<path d="${fill}" fill="${sp.c}" opacity="0.20"/>`);
-    o.push(`<path d="${d}" fill="none" stroke="${sp.c}" stroke-width="2.4" `
-         + `stroke-linejoin="round" stroke-linecap="round"/>`);
-  }
-
   // ── podium: the three fastest tracks, sized by rank
-  const LIST_Y = HR_TOP + HR_H + 96;   // clear of the HR axis numbers
+  const LIST_Y = CHART_BOT + 96;       // follows the pace chart now
 
 
   const ranked = (eligible.length ? eligible : songs).slice().sort((a, b) => b.gap - a.gap);
@@ -829,8 +773,19 @@ function buildCard(data, opts = {}) {
       const nm = sg.track.length > maxChars ? sg.track.slice(0, maxChars - 1) + '…' : sg.track;
       o.push(`<text x="${tx}" y="${(mid - (i === 0 ? 4 : 2)).toFixed(0)}" fill="${INK}" `
            + `font-size="${trackSz}" font-weight="${i === 0 ? 700 : 600}" letter-spacing="-0.3">${esc(nm)}</text>`);
-      o.push(`<text x="${tx}" y="${(mid + artistSz + (i === 0 ? 4 : 1)).toFixed(0)}" fill="${DIM}" `
-           + `font-size="${artistSz}">${esc(sg.artist)}</text>`);
+      const subY = +(mid + artistSz + (i === 0 ? 4 : 1)).toFixed(0);
+      o.push(`<text x="${tx}" y="${subY}" fill="${DIM}" font-size="${artistSz}">${esc(sg.artist)}</text>`);
+      if (sg.genre) {
+        // genre chip, placed past the artist name using the width estimator
+        const gx = tx + textW(sg.artist, artistSz) + 14;
+        const gw = textW(sg.genre, artistSz - 2) + 16;
+        const gh = artistSz + 7;
+        o.push(`<rect x="${gx.toFixed(1)}" y="${(subY - artistSz + 1).toFixed(1)}" `
+             + `width="${gw.toFixed(1)}" height="${gh.toFixed(1)}" rx="${(gh/2).toFixed(1)}" `
+             + `fill="${sg.colour}" opacity="0.15"/>`);
+        o.push(`<text x="${(gx + gw/2).toFixed(1)}" y="${(subY - 1).toFixed(1)}" fill="${sg.colour}" `
+             + `font-size="${artistSz - 2}" font-weight="600" text-anchor="middle">${esc(sg.genre)}</text>`);
+      }
 
       o.push(`<text x="${W-PAD}" y="${(mid + 2).toFixed(0)}" fill="${sg.colour}" `
            + `font-size="${deltaSz}" font-weight="700" text-anchor="end">${paceStr(sg.gap)}</text>`);

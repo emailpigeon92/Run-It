@@ -373,30 +373,53 @@
     const need = activity.songs.filter(s => !artCache.has(artKey(s)));
     if (!need.length) { applyArt(true); render(); return; }
 
-    $('artstatus').textContent = `looking up ${need.length} covers…`;
-    try {
-      const r = await fetch('/api/art', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tracks: need.map(s => ({ artist: s.artist, track: s.track })) }),
-      });
-      const ct = r.headers.get('content-type') || '';
-      if (!ct.includes('application/json'))
-        throw new Error('needs the deployed site — /api/art only runs on Vercel');
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    // Small batches. One big request blows past Vercel's function time limit,
+    // and a timeout returns an HTML error page rather than JSON.
+    const BATCH = 6;
+    const batches = [];
+    for (let i = 0; i < need.length; i += BATCH) batches.push(need.slice(i, i + BATCH));
 
-      // remember misses too, so we don't ask again for the same tracks
-      for (const s of need) artCache.set(artKey(s), j.art[artKey(s)] || null);
-      applyArt(true);
-      render();
-      const got = activity.songs.filter(s => s.art).length;
-      $('artstatus').textContent = `${got} of ${activity.songs.length} found`
-        + (j.rateLimited ? ' — iTunes rate-limited, try again in a minute' : '');
-    } catch (e) {
+    let done = 0, failed = null, rateLimited = false;
+    for (const batch of batches) {
+      $('artstatus').textContent = `looking up covers… ${done}/${need.length}`;
+      try {
+        const r = await fetch('/api/art', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tracks: batch.map(s => ({ artist: s.artist, track: s.track })) }),
+        });
+        const ct = r.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) {
+          const head = (await r.text()).slice(0, 120).replace(/\s+/g, ' ');
+          throw new Error(r.status === 504 || /timed out|FUNCTION_INVOCATION_TIMEOUT/i.test(head)
+            ? 'the lookup timed out on the server'
+            : `/api/art returned ${r.status}, not JSON — is api/art.js deployed? (${head})`);
+        }
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        for (const s of batch) artCache.set(artKey(s), j.art[artKey(s)] || null);
+        if (j.rateLimited) rateLimited = true;
+        done += batch.length;
+        applyArt(true);
+        render();                      // covers appear progressively
+      } catch (e) {
+        failed = e.message || String(e);
+        break;
+      }
+    }
+
+    applyArt(true);
+    render();
+    const got = activity.songs.filter(s => s.art).length;
+    if (failed && !got) {
       $('art').checked = false;
-      $('artstatus').textContent = '';
-      show('Album covers: ' + (e.message || e));
+      applyArt(false);
+      render();
+      $('artstatus').innerHTML = `<span style="color:#FFB3C8">${failed}</span>`;
+    } else {
+      $('artstatus').textContent = `${got} of ${activity.songs.length} found`
+        + (rateLimited ? ' · iTunes rate-limited, retry in a minute' : '')
+        + (failed ? ' · stopped early: ' + failed : '');
     }
   }
 

@@ -1,11 +1,11 @@
-/* Run Card — engine.   BUILD 20260816-2017
+/* Run Card — engine.   BUILD 20260816-2049
    Pure functions, no DOM. Runs in the browser and under Node, so the same code
    that renders the page can be unit-tested against the Python original. */
 
 // ─────────────────────────────────────────────────────────────── FIT parsing
 // FIT is a binary format: a header, then a stream of "definition" messages
 // describing record layouts, followed by "data" messages using those layouts.
-const BUILD = '20260816-2017';        // shown on the page, so you can
+const BUILD = '20260816-2049';        // shown on the page, so you can
                                 // tell at a glance which build is live
 const FIT_EPOCH = 631065600;           // 1989-12-31T00:00:00Z in unix seconds
 const SEMI = 180 / Math.pow(2, 31);    // semicircles → degrees
@@ -267,6 +267,44 @@ const palette = (n, light) => Array.from({length: Math.max(1, n)}, (_, i) =>
          light ? 0.78 : 0.72,
          light ? (i % 2 ? 0.40 : 0.47) : (i % 2 ? 0.54 : 0.62)));
 
+/* One hue per genre, one shade per song inside it. Genres arrive from the API
+   after mapSongs has run, so this is applied at render time rather than when
+   the songs are first built. Falls back to the per-song rainbow when nothing
+   has a genre yet. */
+function colourByGenre(songs, light = true) {
+  const named = songs.filter(s => s.genre);
+  if (!named.length) return false;
+
+  const order = [];
+  for (const s of songs) if (s.genre && !order.includes(s.genre)) order.push(s.genre);
+
+  const counts = {};
+  for (const s of songs) if (s.genre) counts[s.genre] = (counts[s.genre] || 0) + 1;
+
+  const seen = {};
+  const nG = order.length;
+  for (const s of songs) {
+    if (!s.genre) continue;
+    const gi = order.indexOf(s.genre);
+    const k = (seen[s.genre] = (seen[s.genre] || 0) + 1) - 1;   // 0-based within genre
+    const m = counts[s.genre];
+    const hue = 8 + (gi / Math.max(1, nG)) * 330;
+    // spread lightness across the genre's songs; a lone track sits mid-range
+    const t = m > 1 ? k / (m - 1) : 0.5;
+    const light0 = light ? 0.32 : 0.44, light1 = light ? 0.60 : 0.72;
+    const sat = light ? 0.80 - 0.14 * t : 0.74;
+    s.colour = hslHex(hue, sat, light0 + t * (light1 - light0));
+  }
+
+  // anything without a genre gets a neutral slate, still distinguishable
+  const grey = songs.filter(s => !s.genre);
+  grey.forEach((s, i) => {
+    const t = grey.length > 1 ? i / (grey.length - 1) : 0.5;
+    s.colour = hslHex(218, 0.10, light ? 0.44 + t * 0.22 : 0.52 + t * 0.20);
+  });
+  return true;
+}
+
 // ──────────────────────────────────────────────────────────────────── songs
 function parseSongsCSV(text, t0) {
   const lines = text.trim().split(/\r?\n/).filter(l => l.trim());
@@ -307,7 +345,10 @@ function mapSongs(rows, t0, duration, gap) {
   const songs = [];
   rows.forEach((r, i) => {
     const a = Math.max(0, r.at - t0);
-    const nxt = i + 1 < rows.length ? rows[i+1].at - t0 : a + 210;
+    // the last track has no successor to bound it — assume it was still
+    // playing when you stopped, but cap it so one stale scrobble can't paint
+    // the whole tail of a long run
+    const nxt = i + 1 < rows.length ? rows[i+1].at - t0 : Math.min(duration, a + 600);
     const b = Math.min(duration, nxt);
     if (b - a < 20) return;
     const seg = gap.slice(Math.floor(a), Math.floor(b));
@@ -381,6 +422,7 @@ function buildCard(data, opts = {}) {
 
   // Album covers sit above the waveform, each tied to its stretch of the run by
   // a curly brace. Only reserve the space if there is artwork to show.
+  colourByGenre(songs, O.theme !== 'dark');
   const hasArt = songs.some(s => s.art);
   const ART_SIZE = 84;
   // cover, 9px gap, rule, 16px, pace text, 16px to the chart
@@ -920,7 +962,7 @@ function loadActivity(name, bufOrText) {
   return { name: cleanName(name), t0: built.t0, streams: built.streams, songs: [] };
 }
 
-const API = { BUILD, loadActivity, extractFromZip, sniff, cleanName, findState, parseFIT, parseXML, buildStreams, buildCard,
+const API = { BUILD, colourByGenre, loadActivity, extractFromZip, sniff, cleanName, findState, parseFIT, parseXML, buildStreams, buildCard,
               parseSongsCSV, mapSongs, gradeAdjusted, paceStr, palette };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = API;

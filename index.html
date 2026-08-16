@@ -95,7 +95,6 @@
     </div>
     <div class="ctl">
       <label class="chk"><input type="checkbox" id="d3" checked> 3D route</label>
-      <label class="chk"><input type="checkbox" id="art"> Album covers</label>
       <span id="artstatus" style="font-size:13px;color:var(--dim)"></span>
     </div>
     <div class="ctl">
@@ -163,8 +162,10 @@
         name = inner.name; data = inner.data;
       }
       activity = RunCard.loadActivity(name, data);
+      terrainUri = null;
       applySongs();
       render();
+      loadTerrain();
       $('out').classList.add('show');
       $('out').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) {
@@ -182,10 +183,8 @@
     activity.songs = RunCard.mapSongs(songRows, activity.t0, dur, gap);
     // A new tracklist means new songs: re-use anything cached, then quietly go
     // fetch covers for whatever is new, so the user doesn't have to re-tick.
-    if ($('art').checked) {
-      applyArt(true);
-      if (activity.songs.some(s => !artCache.has(artKey(s)))) setTimeout(loadArt, 0);
-    }
+    applyArt();
+    if (activity.songs.some(s => !artCache.has(artKey(s)))) setTimeout(loadArt, 0);
   }
 
   function render() {
@@ -193,6 +192,7 @@
     const map3d = $('d3').checked;
     const { svg } = RunCard.buildCard(activity, {
       map3d, rot: +$('rot').value, relief: +$('ex').value,
+      terrain: terrainUri, radiusMi: 5,
     });
     $('card').innerHTML = svg;
 
@@ -256,8 +256,10 @@
                                           artist: tr[0], track: tr[1] }));
     activity = { name: 'Ridge Loop (demo)', t0, streams: S, songs: [] };
     songRows = rows;
+    terrainUri = null;
     applySongs();
     render();
+    loadTerrain();
     $('out').classList.add('show');
     $('out').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -363,19 +365,40 @@
 
   // ── album covers, fetched once per session and cached by artist|track
   const artCache = new Map();
+  const genreCache = new Map();
+  let terrainUri = null;
   const artKey = s => `${s.artist}|${s.track}`.toLowerCase();
 
-  function applyArt(on) {
+  function applyArt() {
     if (!activity) return;
-    for (const s of activity.songs) s.art = on ? (artCache.get(artKey(s)) || null) : null;
+    for (const s of activity.songs) {
+      s.art = artCache.get(artKey(s)) || null;
+      s.genre = genreCache.get(artKey(s)) || null;
+    }
   }
 
+  // Terrain tile for the 5-mile inset. Fetched once per activity; the card
+  // renders the dashed-circle version until it lands.
+  async function loadTerrain() {
+    if (!activity || !activity.streams.latlng.length) return;
+    const ll = activity.streams.latlng;
+    const lats = ll.map(p => p[0]), lons = ll.map(p => p[1]);
+    const lat = (Math.max(...lats) + Math.min(...lats)) / 2;
+    const lon = (Math.max(...lons) + Math.min(...lons)) / 2;
+    try {
+      const r = await fetch(`/api/basemap?lat=${lat}&lon=${lon}`
+                          + `&radius_m=${(5 * 1609.34).toFixed(0)}&size=400&style=outdoors`);
+      if (!(r.headers.get('content-type') || '').includes('application/json')) return;
+      const j = await r.json();
+      if (j.uri) { terrainUri = j.uri; render(); }
+      else if (j.error) $('artstatus').textContent = 'terrain: ' + j.error;
+    } catch { /* dashed circles are a fine fallback */ }
+  }
+
+  // Covers are always on now — no toggle. Called automatically whenever a
+  // tracklist appears or changes.
   async function loadArt() {
-    if (!activity || !activity.songs.length) {
-      $('artstatus').textContent = 'load a tracklist first';
-      $('art').checked = false;
-      return;
-    }
+    if (!activity || !activity.songs.length) return;
     const need = activity.songs.filter(s => !artCache.has(artKey(s)));
     if (!need.length) { applyArt(true); render(); return; }
 
@@ -403,10 +426,13 @@
         }
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-        for (const s of batch) artCache.set(artKey(s), j.art[artKey(s)] || null);
+        for (const s of batch) {
+          artCache.set(artKey(s), j.art[artKey(s)] || null);
+          if (j.genres && j.genres[artKey(s)]) genreCache.set(artKey(s), j.genres[artKey(s)]);
+        }
         if (j.rateLimited) rateLimited = true;
         done += batch.length;
-        applyArt(true);
+        applyArt();
         render();                      // covers appear progressively
       } catch (e) {
         failed = e.message || String(e);
@@ -414,14 +440,11 @@
       }
     }
 
-    applyArt(true);
+    applyArt();
     render();
     const got = activity.songs.filter(s => s.art).length;
     if (failed && !got) {
-      $('art').checked = false;
-      applyArt(false);
-      render();
-      $('artstatus').innerHTML = `<span style="color:#FFB3C8">${failed}</span>`;
+      $('artstatus').innerHTML = `<span style="color:#FFB3C8">covers: ${failed}</span>`;
     } else {
       $('artstatus').textContent = `${got} of ${activity.songs.length} found`
         + (rateLimited ? ' · iTunes rate-limited, retry in a minute' : '')
@@ -429,10 +452,7 @@
     }
   }
 
-  $('art').addEventListener('change', e => {
-    if (e.target.checked) loadArt();
-    else { applyArt(false); render(); $('artstatus').textContent = ''; }
-  });
+
 
   const drop = $('drop');
   ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => {

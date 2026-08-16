@@ -260,8 +260,10 @@ function hslHex(h, s, l) {
   };
   return '#' + f(0) + f(8) + f(4);
 }
-const palette = n => Array.from({length: Math.max(1, n)}, (_, i) =>
-  hslHex(8 + (i / Math.max(1, n)) * 330, 0.72, i % 2 ? 0.54 : 0.62));
+const palette = (n, light) => Array.from({length: Math.max(1, n)}, (_, i) =>
+  hslHex(8 + (i / Math.max(1, n)) * 330,
+         light ? 0.78 : 0.72,
+         light ? (i % 2 ? 0.40 : 0.47) : (i % 2 ? 0.54 : 0.62)));
 
 // ──────────────────────────────────────────────────────────────────── songs
 function parseSongsCSV(text, t0) {
@@ -311,7 +313,7 @@ function mapSongs(rows, t0, duration, gap) {
                  secs: b - a,
                  gap: seg.length ? seg.reduce((x, y) => x + y, 0) / seg.length : 0 });
   });
-  const pal = palette(songs.length);
+  const pal = palette(songs.length, true);   // tuned for the white card
   songs.forEach((s, i) => s.colour = pal[i]);
   return songs;
 }
@@ -360,39 +362,70 @@ function buildCard(data, opts = {}) {
   const hr = S.heartrate, hasHR = hr.some(h => h > 40);
   const latlng = S.latlng || [], hasMap = latlng.length > 0;
 
+  const LIGHT = O.theme !== 'dark';
   const W = 1080;
-  const BG = '#0A0A0F', INK = '#F2F2F5', DIM = '#7A7A8C', FAINT = '#1C1C26';
+  const BG    = LIGHT ? '#FFFFFF' : '#0A0A0F';
+  const INK   = LIGHT ? '#111318' : '#F2F2F5';
+  const DIM   = LIGHT ? '#565E6B' : '#7A7A8C';          // darker than before
+  const HEAD  = LIGHT ? '#242A33' : '#D2D6DE';          // section headings
+  const FAINT = LIGHT ? '#E4E6EB' : '#1C1C26';
+  const HALO  = LIGHT ? '#FFFFFF' : '#000000';   // casing behind the route
+  const PANEL = LIGHT ? '#F6F7F9' : '#101018';
   const PAD = 72, PLOT_W = W - 2 * PAD, N_BARS = 168, BAR_GAP = 2.2;
-  const barW = (PLOT_W - BAR_GAP * (N_BARS - 1)) / N_BARS;
+  const AXIS_W = 52;                    // gutter for the y-axis tick labels
+  const PX = PAD + AXIS_W;              // left edge of the time-series plots
+  const PW = W - PAD - PX;              // their width
+  const barW = (PW - BAR_GAP * (N_BARS - 1)) / N_BARS;
 
   // Album covers sit above the waveform, each tied to its stretch of the run by
   // a curly brace. Only reserve the space if there is artwork to show.
   const hasArt = songs.some(s => s.art);
-  const ART_SIZE = 46, BRACE_H = 14, ART_GAP = 8;
-  const ART_BAND = hasArt ? ART_SIZE + ART_GAP + BRACE_H + 10 : 0;
+  const ART_SIZE = 76, BRACE_H = 13, ART_GAP = 7;
+  const ART_BAND = hasArt ? ART_SIZE + ART_GAP + BRACE_H + 8 : 0;
 
-  const MAP_TOP = 344, MAP_H = 430;
-  const WAVE_HALF = hasMap ? 130 : 168;
-  const WAVE_CY = (hasMap ? MAP_TOP + MAP_H + 56 + WAVE_HALF : 505) + ART_BAND;
+  const LOC_BOX = 172, LOC_GAP = 22;
+  const hasLoc = hasMap && opts.locator !== false;
+  const MAP_TOP = 322, MAP_H = 384;    // trimmed to buy height for the covers
+  const MAP_W = hasLoc ? PLOT_W - LOC_BOX - LOC_GAP : PLOT_W;
+  const WAVE_HALF = hasMap ? 118 : 168;
+  const WAVE_CY = (hasMap ? MAP_TOP + MAP_H + 74 + WAVE_HALF : 505) + ART_BAND;
   const STRIP_Y = WAVE_CY + WAVE_HALF + 38, STRIP_H = 16;
-  const HR_TOP = STRIP_Y + STRIP_H + 50, HR_H = 80, ROW_H = 32;
-  const H = (hasMap ? 1560 : 1350) + ART_BAND;
+  const HR_TOP = STRIP_Y + STRIP_H + 62, HR_H = 70, ROW_H = 32;
+  const H = (hasMap ? 1560 : 1350) + ART_BAND;   // provisional; trimmed below
 
   const sorted = gap.slice().sort((a, b) => a - b);
   const gLo = sorted[Math.floor(sorted.length * 0.02)];
   const gHi = sorted[Math.floor(sorted.length * 0.98)];
   const runGap = gap.reduce((a, b) => a + b, 0) / gap.length;
   const songAt = t => songs.find(s => t >= s.t0 && t < s.t1) || null;
+  // Most-played genre, weighted by seconds listened rather than track count —
+  // one nine-minute song shouldn't lose to two two-minute ones.
+  const genreSecs = {};
+  for (const sg of songs) if (sg.genre) genreSecs[sg.genre] = (genreSecs[sg.genre] || 0) + sg.secs;
+  const topGenre = Object.keys(genreSecs).sort((a, b) => genreSecs[b] - genreSecs[a])[0] || null;
+
   const eligible = songs.filter(s => s.secs >= 60);
   const hero = eligible.length
     ? eligible.reduce((a, b) => b.gap > a.gap ? b : a)
     : (songs[0] || null);
 
   const o = [];
+  // Every section gets the same treatment: heading, then a rule 11px below.
+  const section = (yText, label, right) => {
+    o.push(`<text x="${PX}" y="${yText}" fill="${HEAD}" font-size="15.5" `
+         + `font-weight="600" letter-spacing="2.2">${esc(label)}</text>`);
+    if (right) o.push(`<text x="${W-PAD}" y="${yText}" fill="${DIM}" font-size="14" `
+                    + `text-anchor="end">${esc(right)}</text>`);
+    o.push(`<line x1="${PAD}" y1="${yText + 11}" x2="${W-PAD}" y2="${yText + 11}" `
+         + `stroke="${FAINT}" stroke-width="1.5"/>`);
+  };
   o.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">`);
-  o.push(`<defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#12121A"/><stop offset="55%" stop-color="${BG}"/><stop offset="100%" stop-color="#0D0D14"/></linearGradient>`);
-  o.push(`<linearGradient id="hrf" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FF4D6D" stop-opacity="0.55"/><stop offset="100%" stop-color="#FF4D6D" stop-opacity="0.02"/></linearGradient>`);
-  o.push(`<linearGradient id="elf" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#5B8CB8" stop-opacity="0.42"/><stop offset="100%" stop-color="#5B8CB8" stop-opacity="0.02"/></linearGradient></defs>`);
+  o.push(`<defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">`
+       + (LIGHT ? `<stop offset="0%" stop-color="#FFFFFF"/><stop offset="100%" stop-color="#FBFBFD"/>`
+                : `<stop offset="0%" stop-color="#12121A"/><stop offset="55%" stop-color="${BG}"/><stop offset="100%" stop-color="#0D0D14"/>`)
+       + `</linearGradient>`);
+  o.push(`<linearGradient id="hrf" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${LIGHT?'#E11D48':'#FF4D6D'}" stop-opacity="${LIGHT?0.28:0.55}"/><stop offset="100%" stop-color="${LIGHT?'#E11D48':'#FF4D6D'}" stop-opacity="0.02"/></linearGradient>`);
+  o.push(`<linearGradient id="elf" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${LIGHT?'#3B6E9E':'#5B8CB8'}" stop-opacity="${LIGHT?0.30:0.42}"/><stop offset="100%" stop-color="${LIGHT?'#3B6E9E':'#5B8CB8'}" stop-opacity="0.02"/></linearGradient></defs>`);
   o.push(`<rect width="${W}" height="${H}" fill="url(#bg)"/>`);
 
   // header
@@ -407,54 +440,142 @@ function buildCard(data, opts = {}) {
 
   let gainM = 0;
   for (let i = 1; i < elev.length; i++) gainM += Math.max(0, elev[i] - elev[i-1]);
+
+  // h:mm once you pass an hour — "88:05" reads like a pace, not a duration
+  const hrs = Math.floor(duration / 3600);
+  const timeStr = hrs > 0
+    ? `${hrs}:${String(Math.floor((duration % 3600) / 60)).padStart(2, '0')}`
+    : `${Math.floor(duration / 60)}:${String(Math.floor(duration % 60)).padStart(2, '0')}`;
+
   const stats = [
     [(S.distance[S.distance.length-1] / 1609.34).toFixed(2), 'MILES'],
-    [`${Math.floor(duration/60)}:${String(Math.floor(duration%60)).padStart(2,'0')}`, 'TIME'],
-    [paceStr(runGap), 'AVG GAP /MI'],
-    hasHR ? [String(Math.round(hr.reduce((a,b)=>a+b,0)/hr.length)), 'AVG BPM']
-          : [Math.round(gainM * 3.28084).toLocaleString(), 'FT CLIMB'],
+    [timeStr, 'TIME'],
+    [paceStr(runGap), 'PACE / MI'],
+    [hasHR ? String(Math.round(hr.reduce((a,b)=>a+b,0)/hr.length)) : '—', 'AVG BPM'],
+    [Math.round(gainM * 3.28084).toLocaleString(), 'TOTAL CLIMB (FT)'],
+    [String(songs.length), 'SONGS'],
+    [topGenre || '—', 'TOP GENRE'],
   ];
+  // Equal-width slots make the gaps look uneven, because the values are not
+  // equal width. Measure each item and distribute the leftover space instead.
+  const textW = (str, size, ls = 0) => {
+    let w = 0;
+    for (const ch of String(str)) w += /[.,:'!|]/.test(ch) ? size * 0.30
+                                   : ch === ' ' ? size * 0.28
+                                   : /[A-Z]/.test(ch) ? size * 0.66 : size * 0.56;
+    return w + ls * String(str).length;
+  };
+  const statSizes = stats.map(([v]) => String(v).length > 8 ? 22 : 28);
+  const statW = stats.map(([v, l], i) =>
+    Math.max(textW(v, statSizes[i]), textW(l, 11.5, 1.2)));
+  const slack = Math.max(0, PLOT_W - statW.reduce((a, b) => a + b, 0));
+  const gapW = slack / (stats.length - 1);
+  let sx = PAD;
   stats.forEach(([v, l], i) => {
-    const x = Math.round(PAD + i * (PLOT_W / 4));
-    o.push(`<text x="${x}" y="232" fill="${INK}" font-size="40" font-weight="600">${v}</text>`);
-    o.push(`<text x="${x}" y="258" fill="${DIM}" font-size="15" letter-spacing="1.8">${l}</text>`);
+    o.push(`<text x="${sx.toFixed(1)}" y="228" fill="${INK}" font-size="${statSizes[i]}" font-weight="600">${v}</text>`);
+    o.push(`<text x="${sx.toFixed(1)}" y="252" fill="${DIM}" font-size="11.5" letter-spacing="1.2">${l}</text>`);
+    sx += statW[i] + gapW;
   });
-  // ── state locator inset, top right
-  if (hasMap && opts.locator !== false) {
+  // ── locator column, stacked on the right of the route map: the whole state
+  //    above, a 10-mile zoom below. Wikipedia infobox logic.
+  if (hasLoc) {
+    const bx = W - PAD - LOC_BOX;
+    const y1 = MAP_TOP, y2 = MAP_TOP + LOC_BOX + 22;
     const mid = latlng[Math.floor(latlng.length / 2)];
+    const frame = (y, label) => {
+      o.push(`<rect x="${bx}" y="${y}" width="${LOC_BOX}" height="${LOC_BOX}" rx="4" `
+           + `fill="${LIGHT ? '#FFFFFF' : '#101018'}" stroke="${LIGHT ? '#111318' : '#4A4A5E'}" stroke-width="1.5"/>`);
+      o.push(`<text x="${bx + LOC_BOX / 2}" y="${y + LOC_BOX + 16}" fill="${DIM}" font-size="12" `
+           + `text-anchor="middle" letter-spacing="1.5">${esc(label)}</text>`);
+    };
+
+    // upper — the state, with a dot where you ran
     const st = mid && findState(mid[0], mid[1]);
     if (st) {
-      const BOX = 132, bx = W - PAD - BOX, by = 44;
       const pts = st.rings.flat();
       const lons = pts.map(p => p[0]), lats = pts.map(p => p[1]);
       const lat0 = (Math.max(...lats) + Math.min(...lats)) / 2;
       const kx = Math.cos(lat0 * Math.PI / 180);
       const spanX = Math.max(1e-9, (Math.max(...lons) - Math.min(...lons)) * kx);
       const spanY = Math.max(1e-9, Math.max(...lats) - Math.min(...lats));
-      const inner = BOX - 30;
+      const inner = LOC_BOX - 28;
       const sc = Math.min(inner / spanX, inner / spanY);
-      const ox = bx + (BOX - spanX * sc) / 2 + Math.min(...lons) * kx * -sc;
-      const oy = by + 4 + (inner - spanY * sc) / 2 + Math.max(...lats) * sc;
+      const ox = bx + (LOC_BOX - spanX * sc) / 2 - Math.min(...lons) * kx * sc;
+      const oy = y1 + (LOC_BOX - spanY * sc) / 2 + Math.max(...lats) * sc;
       const px = (lo, la) => [ox + lo * kx * sc, oy - la * sc];
 
-      o.push(`<rect x="${bx}" y="${by}" width="${BOX}" height="${BOX}" rx="12" `
-           + `fill="#101018" stroke="${FAINT}" stroke-width="1.5"/>`);
+      frame(y1, st.name.toUpperCase());
       for (const ring of st.rings) {
         const d = ring.map((p, i) => (i ? 'L' : 'M') +
           px(p[0], p[1]).map(v => v.toFixed(1)).join(',')).join(' ') + ' Z';
-        o.push(`<path d="${d}" fill="#20202C" stroke="#4A4A5E" stroke-width="1.2" `
-             + `stroke-linejoin="round"/>`);
+        o.push(`<path d="${d}" fill="${LIGHT ? '#E8EBF0' : '#20202C'}" `
+             + `stroke="${LIGHT ? '#8A93A3' : '#4A4A5E'}" stroke-width="1.2" stroke-linejoin="round"/>`);
       }
       const [dx, dy] = px(mid[1], mid[0]);
-      o.push(`<circle cx="${dx.toFixed(1)}" cy="${dy.toFixed(1)}" r="6" `
-           + `fill="#FF5FA2" opacity="0.28"/>`);
-      o.push(`<circle cx="${dx.toFixed(1)}" cy="${dy.toFixed(1)}" r="3" fill="#FF5FA2"/>`);
-      o.push(`<text x="${bx + BOX / 2}" y="${by + BOX - 9}" fill="${DIM}" font-size="12" `
-           + `text-anchor="middle" letter-spacing="1.6">${esc(st.name.toUpperCase())}</text>`);
+      o.push(`<circle cx="${dx.toFixed(1)}" cy="${dy.toFixed(1)}" r="13" fill="#E11D48" opacity="0.20"/>`);
+      o.push(`<circle cx="${dx.toFixed(1)}" cy="${dy.toFixed(1)}" r="6.5" fill="#E11D48" `
+           + `stroke="${LIGHT ? '#FFFFFF' : '#0A0A0F'}" stroke-width="1.8"/>`);
+    } else {
+      frame(y1, 'LOCATION');
+    }
+
+    // lower — 10-mile radius, route drawn flat
+    {
+      const R_MI = opts.radiusMi || 5, R_M = R_MI * 1609.34;
+      const lats = latlng.map(p => p[0]), lons = latlng.map(p => p[1]);
+      const cLat = (Math.max(...lats) + Math.min(...lats)) / 2;
+      const cLon = (Math.max(...lons) + Math.min(...lons)) / 2;
+      const kx = Math.cos(cLat * Math.PI / 180);
+      const sc = (LOC_BOX - 20) / (2 * R_M);
+      const cx = bx + LOC_BOX / 2, cy = y2 + LOC_BOX / 2;
+      const px = (la, lo) => [cx + (lo - cLon) * kx * 111320 * sc,
+                              cy - (la - cLat) * 110540 * sc];
+
+      frame(y2, `${R_MI} MI RADIUS`);
+
+      // Terrain tile, if one was fetched. It is projected at the same centre
+      // and metres-per-pixel as the route, so the two line up exactly.
+      if (opts.terrain) {
+        o.push(`<clipPath id="terrclip"><rect x="${bx + 1}" y="${y2 + 1}" `
+             + `width="${LOC_BOX - 2}" height="${LOC_BOX - 2}" rx="3"/></clipPath>`);
+        const imgSide = (2 * R_M) * sc;      // the tile covers exactly 2*R
+        o.push(`<image clip-path="url(#terrclip)" x="${(cx - imgSide/2).toFixed(1)}" `
+             + `y="${(cy - imgSide/2).toFixed(1)}" width="${imgSide.toFixed(1)}" `
+             + `height="${imgSide.toFixed(1)}" href="${opts.terrain}" opacity="0.92"/>`);
+        o.push(`<text x="${bx + LOC_BOX - 5}" y="${y2 + LOC_BOX - 5}" fill="${LIGHT?'#4B5563':'#8A8A9C'}" `
+             + `font-size="8" text-anchor="end" opacity="0.85">© Mapbox © OSM</text>`);
+      } else {
+        for (const [r, dash, txt] of [[R_M, '3 4', `${R_MI} mi`],
+                                      [R_M / 2, '2 5', `${R_MI / 2} mi`]]) {
+          const rr = r * sc;
+          o.push(`<circle cx="${cx}" cy="${cy}" r="${rr.toFixed(1)}" fill="none" `
+               + `stroke="${LIGHT ? '#C7CCD6' : '#3A3A4A'}" stroke-width="1" stroke-dasharray="${dash}"/>`);
+          // sit the label on the ring, with a chip of background punched out
+          o.push(`<rect x="${(cx - 15).toFixed(1)}" y="${(cy - rr - 6).toFixed(1)}" width="30" height="12" `
+               + `fill="${LIGHT ? '#FFFFFF' : '#101018'}"/>`);
+          o.push(`<text x="${cx}" y="${(cy - rr + 3.5).toFixed(1)}" fill="${DIM}" font-size="9" `
+               + `text-anchor="middle" letter-spacing="0.4">${txt}</text>`);
+        }
+      }
+
+      const step = Math.max(1, Math.floor(latlng.length / 400));
+      const d = [];
+      for (let i = 0; i < latlng.length; i += step) {
+        const [x, y] = px(latlng[i][0], latlng[i][1]);
+        d.push((d.length ? 'L' : 'M') + x.toFixed(1) + ',' + y.toFixed(1));
+      }
+      // white casing so the route survives whatever the terrain looks like
+      o.push(`<path d="${d.join(' ')}" fill="none" stroke="${LIGHT ? '#FFFFFF' : '#000000'}" `
+           + `stroke-width="5" opacity="0.85" stroke-linejoin="round" stroke-linecap="round"/>`);
+      o.push(`<path d="${d.join(' ')}" fill="none" stroke="#E11D48" `
+           + `stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>`);
+      const [sx, sy] = px(latlng[0][0], latlng[0][1]);
+      o.push(`<circle cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="4.5" fill="#E11D48" `
+           + `stroke="#FFFFFF" stroke-width="1.5"/>`);
     }
   }
 
-  o.push(`<line x1="${PAD}" y1="292" x2="${W-PAD}" y2="292" stroke="${FAINT}" stroke-width="1.5"/>`);
+
 
   // ── route
   let label = 'ROUTE';
@@ -477,8 +598,8 @@ function buildCard(data, opts = {}) {
       const yMin = Math.min(...wy), yMax = Math.max(...py);
       const spanX = Math.max(1e-9, Math.max(...px) - Math.min(...px));
       const spanY = Math.max(1e-9, yMax - yMin);
-      const sc = Math.min(PLOT_W / spanX, MAP_H / spanY);
-      const ox = PAD + (PLOT_W - spanX*sc)/2 - Math.min(...px)*sc;
+      const sc = Math.min(MAP_W / spanX, MAP_H / spanY);
+      const ox = PAD + (MAP_W - spanX*sc)/2 - Math.min(...px)*sc;
       const oy = MAP_TOP + (MAP_H - spanY*sc)/2 - yMin*sc;
       proj   = px.map((x, i) => [ox + x*sc, oy + wy[i]*sc]);
       ground = px.map((x, i) => [ox + x*sc, oy + py[i]*sc]);
@@ -486,33 +607,33 @@ function buildCard(data, opts = {}) {
     } else {
       const spanX = Math.max(1e-9, Math.max(...mx) - Math.min(...mx));
       const spanY = Math.max(1e-9, Math.max(...my) - Math.min(...my));
-      const sc = Math.min(PLOT_W / spanX, MAP_H / spanY);
-      const ox = PAD + (PLOT_W - spanX*sc)/2 - Math.min(...mx)*sc;
+      const sc = Math.min(MAP_W / spanX, MAP_H / spanY);
+      const ox = PAD + (MAP_W - spanX*sc)/2 - Math.min(...mx)*sc;
       const oy = MAP_TOP + (MAP_H - spanY*sc)/2 + Math.max(...my)*sc;
       proj = mx.map((x, i) => [ox + x*sc, oy - my[i]*sc]);
     }
 
     const dstr = a => a.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
     if (ground) {
-      o.push(`<path d="${dstr(ground)}" fill="none" stroke="#000" stroke-width="7" opacity="0.5" stroke-linejoin="round"/>`);
-      o.push(`<path d="${dstr(ground)}" fill="none" stroke="#2A2A38" stroke-width="2" opacity="0.75" stroke-linejoin="round"/>`);
+      o.push(`<path d="${dstr(ground)}" fill="none" stroke="${HALO}" stroke-width="7" opacity="${LIGHT?0.9:0.5}" stroke-linejoin="round"/>`);
+      o.push(`<path d="${dstr(ground)}" fill="none" stroke="${LIGHT?'#C9CDD6':'#2A2A38'}" stroke-width="2" opacity="0.75" stroke-linejoin="round"/>`);
       const every = Math.max(1, Math.round(proj.length / 90));
       for (let i = 0; i < proj.length; i += every)
-        o.push(`<line x1="${ground[i][0].toFixed(1)}" y1="${ground[i][1].toFixed(1)}" x2="${proj[i][0].toFixed(1)}" y2="${proj[i][1].toFixed(1)}" stroke="#3A3A4A" stroke-width="1" opacity="0.45"/>`);
+        o.push(`<line x1="${ground[i][0].toFixed(1)}" y1="${ground[i][1].toFixed(1)}" x2="${proj[i][0].toFixed(1)}" y2="${proj[i][1].toFixed(1)}" stroke="${LIGHT?'#CFD3DB':'#3A3A4A'}" stroke-width="1" opacity="0.45"/>`);
     }
-    o.push(`<path d="${dstr(proj)}" fill="none" stroke="#000" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>`);
+    o.push(`<path d="${dstr(proj)}" fill="none" stroke="${HALO}" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" opacity="${LIGHT?0.95:0.55}"/>`);
 
     const step = Math.max(1, Math.floor(proj.length / 700));
     for (let k = 0; k + step < proj.length; k += step) {
       const sg = songAt(k);
       const v = gap[Math.min(k, gap.length - 1)];
       const n = Math.max(0, Math.min(1, gHi > gLo ? (v - gLo) / (gHi - gLo) : 0.5));
-      o.push(`<line x1="${proj[k][0].toFixed(1)}" y1="${proj[k][1].toFixed(1)}" x2="${proj[k+step][0].toFixed(1)}" y2="${proj[k+step][1].toFixed(1)}" stroke="${sg ? sg.colour : '#3A3A48'}" stroke-width="${(3 + 4.4*n).toFixed(1)}" stroke-linecap="round"/>`);
+      o.push(`<line x1="${proj[k][0].toFixed(1)}" y1="${proj[k][1].toFixed(1)}" x2="${proj[k+step][0].toFixed(1)}" y2="${proj[k+step][1].toFixed(1)}" stroke="${sg ? sg.colour : (LIGHT?'#9AA0AC':'#3A3A48')}" stroke-width="${(3 + 4.4*n).toFixed(1)}" stroke-linecap="round"/>`);
     }
     const a0 = proj[0], a1 = proj[proj.length - 1];
     o.push(`<circle cx="${a1[0].toFixed(1)}" cy="${a1[1].toFixed(1)}" r="9" fill="${BG}" stroke="${INK}" stroke-width="3"/>`);
     o.push(`<circle cx="${a0[0].toFixed(1)}" cy="${a0[1].toFixed(1)}" r="6.5" fill="${INK}"/>`);
-    o.push(`<text x="${PAD}" y="${MAP_TOP-14}" fill="${DIM}" font-size="16" letter-spacing="2.5">${label}</text>`);
+    section(MAP_TOP - 22, 'ROUTE', label.replace(/^ROUTE\s*·\s*/, ''));
   }
 
   // ── album covers + curly braces marking each song's stretch of the run
@@ -524,8 +645,8 @@ function buildCard(data, opts = {}) {
     o.push(`<defs><clipPath id="artclip"><rect x="0" y="0" width="${ART_SIZE}" height="${ART_SIZE}" rx="7"/></clipPath></defs>`);
 
     for (const sg of songs) {
-      const x0 = PAD + sg.t0 / duration * PLOT_W;
-      const x1 = PAD + sg.t1 / duration * PLOT_W;
+      const x0 = PX + sg.t0 / duration * PW;
+      const x1 = PX + sg.t1 / duration * PW;
       const w = x1 - x0;
       if (w < 16) continue;                    // too narrow to read anything
       const xm = (x0 + x1) / 2;
@@ -551,81 +672,191 @@ function buildCard(data, opts = {}) {
     }
   }
 
-  // ── pace waveform
-  const waveLabelY = hasArt
-    ? WAVE_CY - WAVE_HALF - 10 - BRACE_H - ART_GAP - ART_SIZE - 15
-    : WAVE_CY - WAVE_HALF - 26;
-  o.push(`<text x="${PAD}" y="${waveLabelY}" fill="${DIM}" font-size="16" letter-spacing="2.5">GRADE-ADJUSTED PACE</text>`);
+  // ── pace chart: diverging bars around the run average, with a bold cap
+  //    marking each song's own average. Plotted in pace-space (sec/mile) so
+  //    the axis reads like a pace, not a speed.
+  const secPerMi = mps => (mps > 0.1 ? 1609.34 / mps : 9999);
+  const runPace = secPerMi(runGap);
+
+  // Scale is pinned to the song averages ±30s, so it never depends on one
+  // stray GPS spike. Instantaneous bars outside that window get clamped.
+  const songPaces = songs.length ? songs.map(s => secPerMi(s.gap)) : [runPace];
+  const PACE_TOP = Math.min(...songPaces) - 30;      // faster = smaller number
+  const PACE_BOT = Math.max(...songPaces) + 30;
+  const CHART_TOP = WAVE_CY - WAVE_HALF, CHART_BOT = WAVE_CY + WAVE_HALF;
+  const yOf = ps => CHART_TOP + (Math.max(PACE_TOP, Math.min(PACE_BOT, ps)) - PACE_TOP)
+                    / (PACE_BOT - PACE_TOP) * (CHART_BOT - CHART_TOP);
+  const avgY = yOf(runPace);
+
+  const paceTopY = hasArt ? CHART_TOP - 10 - BRACE_H - ART_GAP - ART_SIZE : CHART_TOP;
+  section(paceTopY - 26, 'GRADE-ADJUSTED PACE', 'MIN / MI');
+
+  // gridlines + axis
+  for (const ps of [PACE_TOP, runPace, PACE_BOT]) {
+    const y = yOf(ps), isAvg = ps === runPace;
+    o.push(`<line x1="${PX}" y1="${y.toFixed(1)}" x2="${W-PAD}" y2="${y.toFixed(1)}" `
+         + `stroke="${isAvg ? INK : FAINT}" stroke-width="${isAvg ? 1.6 : 1}" `
+         + `${isAvg ? '' : 'stroke-dasharray="2 6"'}/>`);
+    o.push(`<text x="${PX - 10}" y="${(y + 4).toFixed(1)}" fill="${isAvg ? INK : DIM}" `
+         + `font-size="12.5" text-anchor="end" font-weight="${isAvg ? 600 : 400}">`
+         + `${Math.floor(ps/60)}:${String(Math.round(ps%60)).padStart(2,'0')}</text>`);
+  }
+  // inside the plot — above it would collide with the album-art braces
+  o.push(`<text x="${W-PAD}" y="${(CHART_TOP + 15).toFixed(0)}" fill="${DIM}" font-size="11" `
+       + `text-anchor="end" letter-spacing="1.2" opacity="0.75">FASTER</text>`);
+  o.push(`<text x="${W-PAD}" y="${(CHART_BOT - 7).toFixed(0)}" fill="${DIM}" font-size="11" `
+       + `text-anchor="end" letter-spacing="1.2" opacity="0.75">SLOWER</text>`);
+
+  // fine-grained bars
   for (let b = 0; b < N_BARS; b++) {
     const lo = Math.floor(b / N_BARS * duration);
     const hi = Math.max(lo + 1, Math.floor((b + 1) / N_BARS * duration));
-    let s = 0; for (let i = lo; i < hi; i++) s += gap[Math.min(i, gap.length-1)];
-    const v = s / (hi - lo);
-    let n = gHi > gLo ? (v - gLo) / (gHi - gLo) : 0.5;
-    n = Math.max(0, Math.min(1, n));
-    const h = (0.13 + 0.87 * Math.pow(n, 1.35)) * WAVE_HALF;
+    let acc = 0;
+    for (let i = lo; i < hi; i++) acc += gap[Math.min(i, gap.length - 1)];
+    const y = yOf(secPerMi(acc / (hi - lo)));
     const sg = songAt((b + 0.5) / N_BARS * duration);
-    const x = PAD + b * (barW + BAR_GAP);
-    o.push(`<rect x="${x.toFixed(2)}" y="${(WAVE_CY-h).toFixed(2)}" width="${barW.toFixed(2)}" height="${(2*h).toFixed(2)}" rx="${(barW/2).toFixed(2)}" fill="${sg ? sg.colour : '#3A3A48'}" opacity="0.92"/>`);
+    const x = PX + b * (barW + BAR_GAP);
+    o.push(`<rect x="${x.toFixed(2)}" y="${Math.min(y, avgY).toFixed(2)}" `
+         + `width="${barW.toFixed(2)}" height="${Math.max(0.8, Math.abs(y - avgY)).toFixed(2)}" `
+         + `rx="${(barW/2).toFixed(2)}" fill="${sg ? sg.colour : (LIGHT?'#9AA0AC':'#3A3A48')}" opacity="0.40"/>`);
   }
-  o.push(`<line x1="${PAD}" y1="${WAVE_CY}" x2="${W-PAD}" y2="${WAVE_CY}" stroke="${BG}" stroke-width="1.5" opacity="0.55"/>`);
+
+  // per-song average caps, each labelled with its pace
+  for (const sg of songs) {
+    const x0 = PX + sg.t0 / duration * PW, x1 = PX + sg.t1 / duration * PW;
+    if (x1 - x0 < 5) continue;
+    const y = yOf(secPerMi(sg.gap));
+    o.push(`<line x1="${x0.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(x1-2).toFixed(1)}" y2="${y.toFixed(1)}" `
+         + `stroke="${BG}" stroke-width="6" stroke-linecap="round"/>`);
+    o.push(`<line x1="${x0.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(x1-2).toFixed(1)}" y2="${y.toFixed(1)}" `
+         + `stroke="${sg.colour}" stroke-width="3.5" stroke-linecap="round"/>`);
+    if (x1 - x0 >= 26) {
+      const above = y <= avgY;                 // keep the label off the bars
+      o.push(`<text x="${((x0 + x1) / 2 - 1).toFixed(1)}" y="${(above ? y - 7 : y + 14).toFixed(1)}" `
+           + `fill="${sg.colour}" font-size="10.5" font-weight="600" text-anchor="middle">`
+           + `${paceStr(sg.gap)}</text>`);
+    }
+  }
 
   // ── song strip
   for (const s of songs) {
-    const x0 = PAD + s.t0 / duration * PLOT_W, x1 = PAD + s.t1 / duration * PLOT_W;
+    const x0 = PX + s.t0 / duration * PW, x1 = PX + s.t1 / duration * PW;
     o.push(`<rect x="${x0.toFixed(2)}" y="${STRIP_Y}" width="${Math.max(2, x1-x0-2.5).toFixed(2)}" height="${STRIP_H}" rx="${STRIP_H/2}" fill="${s.colour}"/>`);
   }
 
-  // ── heart rate, or elevation when there is none
+  // ── heart rate (or elevation), split by song so the colours line up with
+  //    the pace chart directly above it
   const series = hasHR ? hr : elev;
   const sLo = Math.min(...series), sHi = Math.max(...series);
-  const pts = [];
-  const stp = Math.max(1, Math.floor(series.length / 400));
-  for (let i = 0; i < series.length; i += stp) {
-    const x = PAD + S.time[i] / duration * PLOT_W;
+  const yHR = i => {
     const n = sHi > sLo ? (series[i] - sLo) / (sHi - sLo) : 0.5;
-    pts.push([x, HR_TOP + HR_H - n * HR_H]);
-  }
-  const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
-  o.push(`<path d="M ${PAD},${HR_TOP+HR_H} ${line} L ${W-PAD},${HR_TOP+HR_H} Z" fill="url(#${hasHR ? 'hrf' : 'elf'})"/>`);
-  o.push(`<path d="${line}" fill="none" stroke="${hasHR ? '#FF4D6D' : '#7FB2DE'}" stroke-width="2.2" opacity="0.9"/>`);
-  o.push(`<text x="${PAD}" y="${HR_TOP-16}" fill="${DIM}" font-size="16" letter-spacing="2.5">${hasHR ? `HEART RATE  ·  ${Math.round(sLo)}–${Math.round(sHi)} BPM` : `ELEVATION  ·  ${Math.round(sLo*3.28084)}–${Math.round(sHi*3.28084)} FT`}</text>`);
+    return HR_TOP + HR_H - n * HR_H;
+  };
+  const xHR = i => PX + S.time[i] / duration * PW;
 
-  // ── tracklist
-  const LIST_Y = HR_TOP + HR_H + 76;
-  o.push(`<line x1="${PAD}" y1="${LIST_Y-42}" x2="${W-PAD}" y2="${LIST_Y-42}" stroke="${FAINT}" stroke-width="1.5"/>`);
-  const listed = (eligible.length ? eligible : songs).slice().sort((a,b) => b.gap - a.gap).slice(0, 8);
-  const hidden = songs.length - listed.length;
-  if (listed.length) {
-    o.push(`<text x="${PAD}" y="${LIST_Y-52}" fill="${DIM}" font-size="16" letter-spacing="2.5">FASTEST TRACKS</text>`);
-    if (hidden > 0) o.push(`<text x="${W-PAD}" y="${LIST_Y-52}" fill="${DIM}" font-size="16" text-anchor="end">+${hidden} more</text>`);
-    const colW = PLOT_W / 2, rows = Math.ceil(listed.length / 2);
-    listed.forEach((sg, i) => {
-      const col = Math.floor(i / rows), row = i % rows;
-      const x = PAD + col * colW, y = LIST_Y + row * ROW_H;
-      let nm = sg.track.length > 22 ? sg.track.slice(0, 21) + '…' : sg.track;
-      o.push(`<circle cx="${Math.round(x+6)}" cy="${Math.round(y-5)}" r="6" fill="${sg.colour}"/>`);
-      o.push(`<text x="${Math.round(x+24)}" y="${Math.round(y)}" fill="${sg === hero ? INK : '#B9B9C6'}" font-size="19" font-weight="${sg === hero ? 700 : 400}">${esc(nm)}</text>`);
-      o.push(`<text x="${Math.round(x+colW-34)}" y="${Math.round(y)}" fill="${DIM}" font-size="18" text-anchor="end">${paceStr(sg.gap)}</text>`);
+  section(HR_TOP - 26, hasHR ? 'HEART RATE' : 'ELEVATION', hasHR ? 'BPM' : 'FEET');
+  for (const frac of [1, 0.5, 0]) {
+    const yy = HR_TOP + HR_H - frac * HR_H;
+    const val = sLo + frac * (sHi - sLo);
+    o.push(`<line x1="${PX}" y1="${yy.toFixed(1)}" x2="${W-PAD}" y2="${yy.toFixed(1)}" `
+         + `stroke="${FAINT}" stroke-width="1" stroke-dasharray="2 6" opacity="0.9"/>`);
+    o.push(`<text x="${PX - 10}" y="${(yy + 4).toFixed(1)}" fill="${DIM}" font-size="12.5" `
+         + `text-anchor="end">${hasHR ? Math.round(val) : Math.round(val * 3.28084)}</text>`);
+  }
+
+
+  const stepHR = Math.max(1, Math.floor(series.length / 500));
+  const spans = songs.length
+    ? songs.map(sg => ({ a: Math.floor(sg.t0), b: Math.ceil(sg.t1), c: sg.colour }))
+    : [{ a: 0, b: series.length - 1, c: hasHR ? '#E11D48' : '#3B6E9E' }];
+
+  for (const sp of spans) {
+    const pts = [];
+    for (let i = Math.max(0, sp.a); i <= Math.min(series.length - 1, sp.b); i += stepHR)
+      pts.push([xHR(i), yHR(i)]);
+    if (pts.length < 2) continue;
+    const d = pts.map((p, k) => (k ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+    // the fill needs one subpath: baseline → curve → baseline. A second M here
+    // would orphan the first point and close the polygon into a wedge.
+    const fill = `M ${pts[0][0].toFixed(1)},${HR_TOP+HR_H} `
+               + pts.map(p => `L ${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ')
+               + ` L ${pts[pts.length-1][0].toFixed(1)},${HR_TOP+HR_H} Z`;
+    o.push(`<path d="${fill}" fill="${sp.c}" opacity="0.20"/>`);
+    o.push(`<path d="${d}" fill="none" stroke="${sp.c}" stroke-width="2.4" `
+         + `stroke-linejoin="round" stroke-linecap="round"/>`);
+  }
+
+  // ── podium: the three fastest tracks, sized by rank
+  const LIST_Y = HR_TOP + HR_H + 96;   // clear of the HR axis numbers
+
+
+  const ranked = (eligible.length ? eligible : songs).slice().sort((a, b) => b.gap - a.gap);
+  const podium = ranked.slice(0, 3);
+  const hidden = Math.max(0, songs.length - podium.length);
+  let FOOT = LIST_Y;
+
+  if (podium.length) {
+    section(LIST_Y - 50, 'FASTEST SONGS', hidden > 0 ? `+${hidden} more` : '');
+
+    // rank → [row height, art size, track size, artist size, delta size]
+    const SPEC = [[86, 68, 34, 19, 40], [58, 44, 24, 15, 27], [48, 36, 20, 13, 22]];
+    let y = LIST_Y;
+
+    podium.forEach((sg, i) => {
+      const [rowH, artSz, trackSz, artistSz, deltaSz] = SPEC[i];
+      const mid = y + rowH / 2;
+      const delta = 1609.34 / sg.gap - 1609.34 / runGap;
+
+      // rank numeral in a fixed-width column so 1/2/3 share a left edge
+      const RANK_W = 46;
+      o.push(`<text x="${PAD}" y="${(mid + trackSz * 0.36).toFixed(0)}" fill="${sg.colour}" `
+           + `font-size="${trackSz + 6}" font-weight="700" opacity="0.9">${i + 1}</text>`);
+
+      let tx = PAD + RANK_W;              // art starts at the same x on every row
+      if (sg.art) {
+        o.push(`<clipPath id="pod${i}"><rect x="${tx}" y="${(mid - artSz/2).toFixed(1)}" `
+             + `width="${artSz}" height="${artSz}" rx="${(artSz*0.14).toFixed(1)}"/></clipPath>`);
+        o.push(`<image clip-path="url(#pod${i})" x="${tx}" y="${(mid - artSz/2).toFixed(1)}" `
+             + `width="${artSz}" height="${artSz}" preserveAspectRatio="xMidYMid slice" href="${sg.art}"/>`);
+        tx += artSz + 14;
+      } else {
+        o.push(`<rect x="${tx}" y="${(mid - artSz/2).toFixed(1)}" width="${artSz}" height="${artSz}" `
+             + `rx="${(artSz*0.14).toFixed(1)}" fill="${sg.colour}" opacity="0.22"/>`);
+        tx += artSz + 14;
+      }
+
+      const maxChars = i === 0 ? 26 : 34;
+      const nm = sg.track.length > maxChars ? sg.track.slice(0, maxChars - 1) + '…' : sg.track;
+      o.push(`<text x="${tx}" y="${(mid - (i === 0 ? 4 : 2)).toFixed(0)}" fill="${INK}" `
+           + `font-size="${trackSz}" font-weight="${i === 0 ? 700 : 600}" letter-spacing="-0.3">${esc(nm)}</text>`);
+      o.push(`<text x="${tx}" y="${(mid + artistSz + (i === 0 ? 4 : 1)).toFixed(0)}" fill="${DIM}" `
+           + `font-size="${artistSz}">${esc(sg.artist)}</text>`);
+
+      o.push(`<text x="${W-PAD}" y="${(mid + 2).toFixed(0)}" fill="${sg.colour}" `
+           + `font-size="${deltaSz}" font-weight="700" text-anchor="end">${paceStr(sg.gap)}</text>`);
+      o.push(`<text x="${W-PAD}" y="${(mid + deltaSz * 0.62 + 12).toFixed(0)}" fill="${DIM}" `
+           + `font-size="${i === 0 ? 14 : 12}" text-anchor="end" letter-spacing="1.2">`
+           + `${delta < 0 ? '−' : '+'}${Math.abs(delta).toFixed(0)}s/mi</text>`);
+
+      y += rowH + (i === 0 ? 12 : 8);
     });
-    const FOOT = LIST_Y + rows * ROW_H + 46;
-    if (hero) {
-      const delta = 1609.34/hero.gap - 1609.34/runGap;
-      o.push(`<rect x="${PAD}" y="${FOOT-32}" width="4" height="52" rx="2" fill="${hero.colour}"/>`);
-      o.push(`<text x="${PAD+20}" y="${FOOT-8}" fill="${DIM}" font-size="15" letter-spacing="2.5">FASTEST SONG</text>`);
-      o.push(`<text x="${PAD+20}" y="${FOOT+16}" fill="${INK}" font-size="23" font-weight="600">${esc(hero.track)} <tspan fill="${DIM}" font-weight="400">— ${esc(hero.artist)}</tspan></text>`);
-      o.push(`<text x="${W-PAD}" y="${FOOT+10}" fill="${hero.colour}" font-size="34" font-weight="700" text-anchor="end">${Math.abs(delta).toFixed(0)}s/mi</text>`);
-      o.push(`<text x="${W-PAD}" y="${FOOT+32}" fill="${DIM}" font-size="15" text-anchor="end" letter-spacing="1.5">${delta < 0 ? 'FASTER' : 'SLOWER'} THAN AVG</text>`);
-    }
+    FOOT = y;
   } else {
-    o.push(`<text x="${PAD}" y="${LIST_Y}" fill="${DIM}" font-size="19">No tracklist — drop a songs.csv to colour this run by music.</text>`);
+    o.push(`<text x="${PAD}" y="${LIST_Y}" fill="${DIM}" font-size="19">No tracklist — add a songs.csv to colour this run by music.</text>`);
+    FOOT = LIST_Y + 40;
   }
 
   o.push('</svg>');
-  return { svg: o.join('\n'), stats: {
+  // fit the canvas to the content instead of guessing
+  const finalH = Math.max(H, Math.round(FOOT + 46));
+  const svgOut = o.join('\n')
+    .replace(`height="${H}" viewBox="0 0 ${W} ${H}"`, `height="${finalH}" viewBox="0 0 ${W} ${finalH}"`)
+    .replace(`<rect width="${W}" height="${H}" fill="url(#bg)"/>`,
+             `<rect width="${W}" height="${finalH}" fill="url(#bg)"/>`);
+  return { svg: svgOut, stats: {
     miles: S.distance[S.distance.length-1] / 1609.34, duration,
     gap: runGap, hasHR, avgHR: hasHR ? hr.reduce((a,b)=>a+b,0)/hr.length : null,
-    songs: songs.length, hero,
+    songs: songs.length, hero, topGenre, podium,
   }};
 }
 

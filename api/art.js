@@ -46,6 +46,51 @@ async function toDataUri(url, budgetMs = 6000) {
   }
 }
 
+/* Last.fm tags are a folksonomy: alongside real genres you get "seen live",
+   "favourites", "awesome". Only trust tags we recognise, and fold the long
+   tail of subgenres into names a person would actually say out loud. */
+const GENRE_MAP = {
+  'classic rock':'Classic Rock','album rock':'Classic Rock','70s':'Classic Rock',
+  'hard rock':'Hard Rock','arena rock':'Hard Rock','glam rock':'Hard Rock',
+  'heavy metal':'Metal','metal':'Metal','thrash metal':'Metal','death metal':'Metal',
+  'nu metal':'Metal','metalcore':'Metal','groove metal':'Metal','speed metal':'Metal',
+  'black metal':'Metal','doom metal':'Metal','power metal':'Metal',
+  'punk':'Punk','punk rock':'Punk','post-punk':'Punk','hardcore punk':'Punk',
+  'rock':'Rock','rock and roll':'Rock','psychedelic rock':'Rock',
+  'alternative':'Alternative','alternative rock':'Alternative','grunge':'Alternative',
+  'indie':'Indie','indie rock':'Indie','indie pop':'Indie',
+  'electronic':'Electronic','house':'Electronic','techno':'Electronic','edm':'Electronic',
+  'dance':'Electronic','electronica':'Electronic','idm':'Electronic','ambient':'Electronic',
+  'drum and bass':'Electronic','dubstep':'Electronic','trance':'Electronic',
+  'hip-hop':'Hip-Hop','hip hop':'Hip-Hop','rap':'Hip-Hop','trap':'Hip-Hop',
+  'pop':'Pop','synthpop':'Pop','dance-pop':'Pop','pop rock':'Pop',
+  'r&b':'R&B','rnb':'R&B','soul':'Soul','funk':'Funk','disco':'Disco',
+  'jazz':'Jazz','blues':'Blues','folk':'Folk','country':'Country',
+  'classical':'Classical','reggae':'Reggae','soundtrack':'Soundtrack',
+};
+
+async function fromLastfmTags(artist, track, apiKey) {
+  const q = (method, extra) =>
+    `${LFM}?method=${method}&artist=${encodeURIComponent(artist)}${extra}`
+    + `&api_key=${apiKey}&format=json&autocorrect=1`;
+  // track tags are more specific; fall back to the artist's
+  for (const url of [q('track.getTopTags', `&track=${encodeURIComponent(track)}`),
+                     q('artist.getTopTags', '')]) {
+    try {
+      const r = await fetch(url, { headers: { 'User-Agent': 'run-card/1.0' } });
+      if (!r.ok) continue;
+      const j = await r.json();
+      const raw = (j.toptags && j.toptags.tag) || [];
+      const list = Array.isArray(raw) ? raw : [raw];
+      for (const t of list) {
+        const g = GENRE_MAP[String(t && t.name || '').toLowerCase().trim()];
+        if (g) return g;
+      }
+    } catch { /* try the next one */ }
+  }
+  return null;
+}
+
 async function fromLastfm(artist, track, apiKey) {
   const url = `${LFM}?method=track.getInfo&artist=${encodeURIComponent(artist)}`
             + `&track=${encodeURIComponent(track)}&api_key=${apiKey}&format=json`;
@@ -117,6 +162,14 @@ export default async function handler(req, res) {
   const misses = [];
   let timedOut = false;
 
+  // ── genres, alongside the artwork so it stays one round trip
+  const genres = {};
+  if (apiKey && body.genres !== false) {
+    const gs = await pool(tracks, 6, t =>
+      left() < 2500 ? null : fromLastfmTags(t.artist || '', t.track || '', apiKey));
+    tracks.forEach((t, i) => { if (gs[i]) genres[key(t.artist, t.track)] = gs[i]; });
+  }
+
   // ── pass 1: Last.fm, 6 at a time
   if (apiKey) {
     const urls = await pool(tracks, 6, t =>
@@ -147,6 +200,7 @@ export default async function handler(req, res) {
 
   return res.status(200).json({
     art,
+    genres,
     found: Object.keys(art).length,
     requested: tracks.length,
     rateLimited,

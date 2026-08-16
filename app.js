@@ -1,10 +1,12 @@
-/* Run Card — engine.
+/* Run Card — engine.   BUILD 20260816-2007
    Pure functions, no DOM. Runs in the browser and under Node, so the same code
    that renders the page can be unit-tested against the Python original. */
 
 // ─────────────────────────────────────────────────────────────── FIT parsing
 // FIT is a binary format: a header, then a stream of "definition" messages
 // describing record layouts, followed by "data" messages using those layouts.
+const BUILD = '20260816-2007';        // shown on the page, so you can
+                                // tell at a glance which build is live
 const FIT_EPOCH = 631065600;           // 1989-12-31T00:00:00Z in unix seconds
 const SEMI = 180 / Math.pow(2, 31);    // semicircles → degrees
 
@@ -384,9 +386,10 @@ function buildCard(data, opts = {}) {
   // cover, 9px gap, rule, 16px, pace text, 14px to the chart
   const ART_BAND = (hasArt || songs.length) ? ART_SIZE + 9 + 16 + 14 : 0;
 
-  const LOC_BOX = 172, LOC_GAP = 22;
+  const LOC_BOX = 232, LOC_GAP = 20;
   const hasLoc = hasMap && opts.locator !== false;
-  const MAP_TOP = 322, MAP_H = 384;    // trimmed to buy height for the covers
+  const MAP_TOP = 190, MAP_H = 484;    // the stats strip is gone, so start higher
+  const MAP_INSET = 62;                // top strip reserved for the corner stats
   const MAP_W = hasLoc ? PLOT_W - LOC_BOX - LOC_GAP : PLOT_W;
   const WAVE_HALF = hasMap ? 118 : 168;
   const WAVE_CY = (hasMap ? MAP_TOP + MAP_H + 74 + WAVE_HALF : 505) + ART_BAND;
@@ -411,6 +414,14 @@ function buildCard(data, opts = {}) {
     : (songs[0] || null);
 
   const o = [];
+  // rough text width, used to place the genre chip after the artist name
+  const textW = (str, size, ls = 0) => {
+    let w = 0;
+    for (const ch of String(str)) w += /[.,:'!|]/.test(ch) ? size * 0.32
+                                   : ch === ' ' ? size * 0.30
+                                   : /[A-Z]/.test(ch) ? size * 0.70 : size * 0.60;
+    return w + ls * String(str).length;
+  };
   // Every section gets the same treatment: heading, then a rule 11px below.
   const section = (yText, label, right) => {
     o.push(`<text x="${PX}" y="${yText}" fill="${HEAD}" font-size="15.5" `
@@ -429,64 +440,49 @@ function buildCard(data, opts = {}) {
   o.push(`<linearGradient id="elf" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${LIGHT?'#3B6E9E':'#5B8CB8'}" stop-opacity="${LIGHT?0.30:0.42}"/><stop offset="100%" stop-color="${LIGHT?'#3B6E9E':'#5B8CB8'}" stop-opacity="0.02"/></linearGradient></defs>`);
   o.push(`<rect width="${W}" height="${H}" fill="url(#bg)"/>`);
 
-  // header
+  // header — filename plus the date, nothing else
   const d = new Date(data.t0 * 1000);
-  const days = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
-  const mons = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-  let hh = d.getHours(), ap = hh >= 12 ? 'PM' : 'AM';
-  hh = hh % 12 || 12;
-  const stamp = `${days[d.getDay()]} ${d.getDate()} ${mons[d.getMonth()]} ${d.getFullYear()}  ·  ${hh}:${String(d.getMinutes()).padStart(2,'0')} ${ap}`;
-  o.push(`<text x="${PAD}" y="112" fill="${INK}" font-size="46" font-weight="700" letter-spacing="-1">${esc(O.name || data.name || 'Run')}</text>`);
-  o.push(`<text x="${PAD}" y="150" fill="${DIM}" font-size="21" letter-spacing="2.5">${stamp}</text>`);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const yy = String(d.getFullYear()).slice(2);
+  o.push(`<text x="${PAD}" y="120" fill="${INK}" font-size="54" font-weight="700" `
+       + `letter-spacing="-1.4">${esc(O.name || data.name || 'Run')} `
+       + `<tspan fill="${DIM}" font-weight="500">(${mm}-${dd}-${yy})</tspan></text>`);
 
   let gainM = 0;
   for (let i = 1; i < elev.length; i++) gainM += Math.max(0, elev[i] - elev[i-1]);
 
-  // h:mm once you pass an hour — "88:05" reads like a pace, not a duration
-  const hrs = Math.floor(duration / 3600);
-  const timeStr = hrs > 0
-    ? `${hrs}:${String(Math.floor((duration % 3600) / 60)).padStart(2, '0')}`
+  const hrsRun = Math.floor(duration / 3600);
+  const timeStr = hrsRun > 0
+    ? `${hrsRun}:${String(Math.floor((duration % 3600) / 60)).padStart(2, '0')}`
     : `${Math.floor(duration / 60)}:${String(Math.floor(duration % 60)).padStart(2, '0')}`;
 
-  const stats = [
-    [(S.distance[S.distance.length-1] / 1609.34).toFixed(2), 'MILES'],
-    [timeStr, 'TIME'],
-    [paceStr(runGap), 'PACE / MI'],
-    [hasHR ? String(Math.round(hr.reduce((a,b)=>a+b,0)/hr.length)) : '—', 'AVG BPM'],
-    [Math.round(gainM * 3.28084).toLocaleString(), 'TOTAL CLIMB (FT)'],
-    [String(songs.length), 'SONGS'],
-    [topGenre || '—', 'TOP GENRE'],
-  ];
-  // Equal-width slots make the gaps look uneven, because the values are not
-  // equal width. Measure each item and distribute the leftover space instead.
-  const textW = (str, size, ls = 0) => {
-    let w = 0;
-    for (const ch of String(str)) w += /[.,:'!|]/.test(ch) ? size * 0.32
-                                   : ch === ' ' ? size * 0.30
-                                   : /[A-Z]/.test(ch) ? size * 0.70 : size * 0.60;
-    return w + ls * String(str).length;
-  };
-  const statSizes = stats.map(([v]) => String(v).length > 8 ? 22 : 28);
-  const statW = stats.map(([v, l], i) =>
-    Math.max(textW(v, statSizes[i]), textW(l, 11.5, 1.2)));
-  const slack = Math.max(0, PLOT_W - statW.reduce((a, b) => a + b, 0));
-  const gapW = slack / (stats.length - 1);
-  let sx = PAD;
-  stats.forEach(([v, l], i) => {
-    o.push(`<text x="${sx.toFixed(1)}" y="228" fill="${INK}" font-size="${statSizes[i]}" font-weight="600">${v}</text>`);
-    o.push(`<text x="${sx.toFixed(1)}" y="252" fill="${DIM}" font-size="11.5" letter-spacing="1.2">${l}</text>`);
-    sx += statW[i] + gapW;
-  });
   // ── locator column, stacked on the right of the route map: the whole state
   //    above, a 10-mile zoom below. Wikipedia infobox logic.
+  // stats in the top corners of the route panel, two per side
+  if (hasMap) {
+    const statTop = MAP_TOP + 2;
+    const put = (x, anchor, val, lab) => {
+      o.push(`<text x="${x.toFixed(0)}" y="${statTop + 28}" fill="${INK}" font-size="32" `
+           + `font-weight="700" text-anchor="${anchor}" letter-spacing="-0.8">${val}</text>`);
+      o.push(`<text x="${x.toFixed(0)}" y="${statTop + 47}" fill="${DIM}" font-size="11.5" `
+           + `text-anchor="${anchor}" letter-spacing="1.5">${lab}</text>`);
+    };
+    const rightEdge = PAD + MAP_W;
+    put(PAD, 'start', (S.distance[S.distance.length-1] / 1609.34).toFixed(2), 'MILES');
+    put(PAD + 138, 'start', timeStr, 'TIME');
+    put(rightEdge - 138, 'end', paceStr(runGap), 'PACE / MI');
+    put(rightEdge, 'end', hasHR ? String(Math.round(hr.reduce((a,b)=>a+b,0)/hr.length)) : '—', 'AVG BPM');
+  }
+
   if (hasLoc) {
     const bx = W - PAD - LOC_BOX;
-    const y1 = MAP_TOP, y2 = MAP_TOP + LOC_BOX + 22;
+    const y1 = MAP_TOP, y2 = MAP_TOP + LOC_BOX + 20;
     const mid = latlng[Math.floor(latlng.length / 2)];
     const frame = (y, label) => {
       o.push(`<rect x="${bx}" y="${y}" width="${LOC_BOX}" height="${LOC_BOX}" rx="4" `
            + `fill="${LIGHT ? '#FFFFFF' : '#101018'}" stroke="${LIGHT ? '#111318' : '#4A4A5E'}" stroke-width="1.5"/>`);
-      o.push(`<text x="${bx + LOC_BOX / 2}" y="${y + LOC_BOX + 16}" fill="${DIM}" font-size="12" `
+      o.push(`<text x="${bx + LOC_BOX / 2}" y="${y + LOC_BOX + 17}" fill="${DIM}" font-size="12.5" font-weight="600" `
            + `text-anchor="middle" letter-spacing="1.5">${esc(label)}</text>`);
     };
 
@@ -509,8 +505,8 @@ function buildCard(data, opts = {}) {
       for (const ring of st.rings) {
         const d = ring.map((p, i) => (i ? 'L' : 'M') +
           px(p[0], p[1]).map(v => v.toFixed(1)).join(',')).join(' ') + ' Z';
-        o.push(`<path d="${d}" fill="${LIGHT ? '#E8EBF0' : '#20202C'}" `
-             + `stroke="${LIGHT ? '#8A93A3' : '#4A4A5E'}" stroke-width="1.2" stroke-linejoin="round"/>`);
+        o.push(`<path d="${d}" fill="${LIGHT ? '#D3D9E2' : '#20202C'}" `
+             + `stroke="${LIGHT ? '#414A57' : '#4A4A5E'}" stroke-width="1.5" stroke-linejoin="round"/>`);
       }
       const [dx, dy] = px(mid[1], mid[0]);
       o.push(`<circle cx="${dx.toFixed(1)}" cy="${dy.toFixed(1)}" r="13" fill="#E11D48" opacity="0.20"/>`);
@@ -550,11 +546,11 @@ function buildCard(data, opts = {}) {
                                       [R_M / 2, '2 5', `${R_MI / 2} mi`]]) {
           const rr = r * sc;
           o.push(`<circle cx="${cx}" cy="${cy}" r="${rr.toFixed(1)}" fill="none" `
-               + `stroke="${LIGHT ? '#C7CCD6' : '#3A3A4A'}" stroke-width="1" stroke-dasharray="${dash}"/>`);
+               + `stroke="${LIGHT ? '#8A93A3' : '#3A3A4A'}" stroke-width="1.2" stroke-dasharray="${dash}"/>`);
           // sit the label on the ring, with a chip of background punched out
           o.push(`<rect x="${(cx - 15).toFixed(1)}" y="${(cy - rr - 6).toFixed(1)}" width="30" height="12" `
                + `fill="${LIGHT ? '#FFFFFF' : '#101018'}"/>`);
-          o.push(`<text x="${cx}" y="${(cy - rr + 3.5).toFixed(1)}" fill="${DIM}" font-size="9" `
+          o.push(`<text x="${cx}" y="${(cy - rr + 3.5).toFixed(1)}" fill="${DIM}" font-size="10" font-weight="600" `
                + `text-anchor="middle" letter-spacing="0.4">${txt}</text>`);
         }
       }
@@ -599,28 +595,30 @@ function buildCard(data, opts = {}) {
       const yMin = Math.min(...wy), yMax = Math.max(...py);
       const spanX = Math.max(1e-9, Math.max(...px) - Math.min(...px));
       const spanY = Math.max(1e-9, yMax - yMin);
-      const sc = Math.min(MAP_W / spanX, MAP_H / spanY);
+      const usable = MAP_H - MAP_INSET;      // corner stats own the top strip
+      const sc = Math.min(MAP_W / spanX, usable / spanY);
       const ox = PAD + (MAP_W - spanX*sc)/2 - Math.min(...px)*sc;
-      const oy = MAP_TOP + (MAP_H - spanY*sc)/2 - yMin*sc;
+      const oy = MAP_TOP + MAP_INSET + (usable - spanY*sc)/2 - yMin*sc;
       proj   = px.map((x, i) => [ox + x*sc, oy + wy[i]*sc]);
       ground = px.map((x, i) => [ox + x*sc, oy + py[i]*sc]);
       label = `ROUTE  ·  ${Math.round(relief*3.28084)} FT RELIEF  ·  ${Math.round(vx)}× VERTICAL EXAGGERATION`;
     } else {
       const spanX = Math.max(1e-9, Math.max(...mx) - Math.min(...mx));
       const spanY = Math.max(1e-9, Math.max(...my) - Math.min(...my));
-      const sc = Math.min(MAP_W / spanX, MAP_H / spanY);
+      const usable = MAP_H - MAP_INSET;
+      const sc = Math.min(MAP_W / spanX, usable / spanY);
       const ox = PAD + (MAP_W - spanX*sc)/2 - Math.min(...mx)*sc;
-      const oy = MAP_TOP + (MAP_H - spanY*sc)/2 + Math.max(...my)*sc;
+      const oy = MAP_TOP + MAP_INSET + (usable - spanY*sc)/2 + Math.max(...my)*sc;
       proj = mx.map((x, i) => [ox + x*sc, oy - my[i]*sc]);
     }
 
     const dstr = a => a.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
     if (ground) {
       o.push(`<path d="${dstr(ground)}" fill="none" stroke="${HALO}" stroke-width="7" opacity="${LIGHT?0.9:0.5}" stroke-linejoin="round"/>`);
-      o.push(`<path d="${dstr(ground)}" fill="none" stroke="${LIGHT?'#C9CDD6':'#2A2A38'}" stroke-width="2" opacity="0.75" stroke-linejoin="round"/>`);
+      o.push(`<path d="${dstr(ground)}" fill="none" stroke="${LIGHT?'#9BA3B0':'#2A2A38'}" stroke-width="2" opacity="0.9" stroke-linejoin="round"/>`);
       const every = Math.max(1, Math.round(proj.length / 90));
       for (let i = 0; i < proj.length; i += every)
-        o.push(`<line x1="${ground[i][0].toFixed(1)}" y1="${ground[i][1].toFixed(1)}" x2="${proj[i][0].toFixed(1)}" y2="${proj[i][1].toFixed(1)}" stroke="${LIGHT?'#CFD3DB':'#3A3A4A'}" stroke-width="1" opacity="0.45"/>`);
+        o.push(`<line x1="${ground[i][0].toFixed(1)}" y1="${ground[i][1].toFixed(1)}" x2="${proj[i][0].toFixed(1)}" y2="${proj[i][1].toFixed(1)}" stroke="${LIGHT?'#AEB6C2':'#3A3A4A'}" stroke-width="1" opacity="0.6"/>`);
     }
     o.push(`<path d="${dstr(proj)}" fill="none" stroke="${HALO}" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" opacity="${LIGHT?0.95:0.55}"/>`);
 
@@ -916,7 +914,7 @@ function loadActivity(name, bufOrText) {
   return { name: cleanName(name), t0: built.t0, streams: built.streams, songs: [] };
 }
 
-const API = { loadActivity, extractFromZip, sniff, cleanName, findState, parseFIT, parseXML, buildStreams, buildCard,
+const API = { BUILD, loadActivity, extractFromZip, sniff, cleanName, findState, parseFIT, parseXML, buildStreams, buildCard,
               parseSongsCSV, mapSongs, gradeAdjusted, paceStr, palette };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = API;

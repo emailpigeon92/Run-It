@@ -109,6 +109,7 @@
       <button id="again">New run</button>
     </div>
     <div class="note" id="note"></div>
+    <div style="margin-top:10px;font-size:11.5px;color:#5A626E">build <span id="build">—</span></div>
   </div>
 </div>
 
@@ -359,6 +360,8 @@
       applySongs(); render(); clear();
     } catch (err) { show(err.message || String(err)); }
   };
+
+  $('build').textContent = (window.RunCard && RunCard.BUILD) || 'unknown';
 
   for (const id of ['ex', 'rot', 'd3'])
     $(id).addEventListener('input', render);

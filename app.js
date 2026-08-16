@@ -1,11 +1,11 @@
-/* Run Card — engine.   BUILD 20260816-2049
+/* Run Card — engine.   BUILD 20260816-2213
    Pure functions, no DOM. Runs in the browser and under Node, so the same code
    that renders the page can be unit-tested against the Python original. */
 
 // ─────────────────────────────────────────────────────────────── FIT parsing
 // FIT is a binary format: a header, then a stream of "definition" messages
 // describing record layouts, followed by "data" messages using those layouts.
-const BUILD = '20260816-2049';        // shown on the page, so you can
+const BUILD = '20260816-2213';        // shown on the page, so you can
                                 // tell at a glance which build is live
 const FIT_EPOCH = 631065600;           // 1989-12-31T00:00:00Z in unix seconds
 const SEMI = 180 / Math.pow(2, 31);    // semicircles → degrees

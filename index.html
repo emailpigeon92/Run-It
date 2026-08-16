@@ -18,7 +18,8 @@
   .drop{border:2px dashed var(--line);border-radius:18px;padding:44px 24px;text-align:center;
         background:var(--panel);transition:border-color .15s,background .15s;cursor:pointer}
   .drop:hover,.drop.hot{border-color:var(--accent);background:#181822}
-  .drop h2{margin:0 0 8px;font-size:19px;font-weight:600}
+  .drop h2{margin:0 0 10px;font-size:20px;font-weight:600;line-height:1.45}
+  .drop h2 code{font-size:17px;padding:2px 7px}
   .drop p{margin:0;color:var(--dim);font-size:14px}
   .drop .or{margin-top:16px;font-size:13.5px}
   .link{color:#7AA7FF;text-decoration:underline;cursor:pointer}
@@ -69,8 +70,8 @@
 </header>
 
 <div class="drop" id="drop">
-  <h2>Drop a run file here</h2>
-  <p><code>.fit</code> from Garmin · <code>.tcx</code> · <code>.gpx</code> from Strava · or the <code>.zip</code> Garmin gives you</p>
+  <h2>Drop a <code>.fit</code> from Garmin and connect your Last.fm to play</h2>
+  <p>also takes <code>.tcx</code>, <code>.gpx</code> from Strava, or the <code>.zip</code> Garmin gives you</p>
   <p class="or">or <span class="link" id="pick">choose a file</span>
      · <span class="link" id="demo">see a demo run</span></p>
   <input type="file" id="file" hidden>
